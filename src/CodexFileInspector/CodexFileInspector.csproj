@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>CodexFileInspector</AssemblyName>
+    <RootNamespace>CodexFileInspector</RootNamespace>
+    <Version>0.2.4</Version>
+    <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <PackageReference Include="ModelContextProtocol" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\LICENSE;..\..\README.md;..\..\SOURCE.md"
+          Link="%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\DESIGN.md"
+          Condition="Exists('$(MSBuildThisFileDirectory)..\..\DESIGN.md')"
+          Link="DESIGN.md"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\dotnet\**\*"
+          Link="licenses\dotnet\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\.local\tools\ripgrep\15.2.0\win-x64\rg.exe"
+          Link="tools\ripgrep\rg.exe"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\ripgrep\LICENSE-MIT"
+          Link="licenses\ripgrep\LICENSE-MIT"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\ripgrep\UNLICENSE"
+          Link="licenses\ripgrep\UNLICENSE"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\THIRD-PARTY-NOTICES.md"
+          Link="THIRD-PARTY-NOTICES.md"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="EnsureBundledRipgrepExists" BeforeTargets="PrepareForBuild"
+          Condition="!Exists('$(MSBuildThisFileDirectory)..\..\.local\tools\ripgrep\15.2.0\win-x64\rg.exe')">
+    <Error Text="Bundled ripgrep 15.2.0 is missing. Run: pwsh -NoProfile -File .\scripts\Acquire-Ripgrep.ps1" />
+  </Target>
+</Project>

@@ -1,0 +1,14 @@
+# Repository-local tools, caches, isolated configuration, and temporary state
+.local/
+
+# Build, test, coverage, report, and log output
+.artifacts/
+
+# Local IDE state
+.vs/
+*.user
+*.suo
+
+# Common operating-system metadata
+Thumbs.db
+.DS_Store

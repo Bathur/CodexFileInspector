@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/CodexFileInspector/CodexFileInspector.csproj" />
+  <Project Path="tests/CodexFileInspector.Tests/CodexFileInspector.Tests.csproj" />
+</Solution>
