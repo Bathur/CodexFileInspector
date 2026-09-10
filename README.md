@@ -85,6 +85,24 @@ output_token_limit = 40000
 
 Configuration background: [official MCP documentation](https://learn.chatgpt.com/docs/extend/mcp) and [AGENTS.md instructions](https://learn.chatgpt.com/docs/agent-configuration/agents-md). The direct-only setting above is part of this project's tested deployment; not every host/version exposes every MCP option identically.
 
+## Optional failure diagnostics
+
+An agent can work around a failed tool call and finish its task without drawing attention to the failure. Optional diagnostics leave evidence for later review without asking the agent to interrupt its main task and report every problem.
+
+Starting in 0.2.5, file diagnostics are disabled by default. To enable them, add this line to the existing `[mcp_servers.codex_file_inspector]` table, next to `command` and **before the first per-tool table**:
+
+```toml
+args = ["--diagnostics"]
+```
+
+If `args` already exists, append `"--diagnostics"` to that array instead of adding another key. Restart Codex to apply the startup argument. To disable diagnostics, remove that argument and restart again; existing logs remain on disk.
+
+Only final tool results with `status=error` or `status=partial` are recorded. Successful calls, ordinary cancellation, and SDK/protocol/startup failures outside the standard tool-result boundary are excluded. The first eligible record creates `logs` under the application directory, independent of the Host working directory or inspected path. For the example installation, this is `C:\Tools\CodexFileInspector\logs`.
+
+Each process writes its own JSONL files in the background. Tool calls do not wait for disk writes; full queues, write failures, and shutdown can lose records. Records and storage have fixed limits, described in [DESIGN.md](DESIGN.md#optional-failure-diagnostics). The tools still do not modify inspected files; the optional internal logs are the only diagnostic write exception.
+
+Logs contain original bound paths, queries, filters, error/warning information, and already-caught exception details without redaction. They do not copy read/search output. Review log contents before sharing them. A recorded failure is a clue for investigation, not an automatic determination that the model or implementation is at fault.
+
 ## Scope and safety
 
 - This server is **not a sandbox or a directory allowlist**. It can attempt to read any path accessible to its OS process identity, including named network-backed paths. Install it only in an environment whose filesystem access you intend to give the agent.
@@ -105,7 +123,7 @@ pwsh -NoProfile -File .\build.ps1 -Target Publish -Configuration Release
 
 The acquisition script verifies the official archive against the pinned SHA-256. Build scripts keep homes, caches, temporary data, and artifacts inside the checkout; they do not change permanent environment variables or global configuration. The locked dependency graph is restored from NuGet. Publication checks exercise both supported MCP protocol eras and compare the executable's actual descriptions, schemas, and annotations with the intended contract.
 
-The current regression suite contains 167 cases, including real ripgrep filtering, pagination/context, output budgets, error handling, cancellation, and STDIO integration. This is not a claim of complete coverage or broad cross-machine certification. Published binaries are unsigned.
+Local 0.2.5 verification passed 201/201 Release tests and 8/8 published-executable STDIO tests. Coverage includes real ripgrep filtering, pagination/context, output budgets, error handling, cancellation, diagnostic capture/limits/failure isolation, and both supported protocol eras. These are local verification results, not a claim of complete coverage or broad cross-machine certification. Published binaries are unsigned.
 
 ## AI development and maintenance
 

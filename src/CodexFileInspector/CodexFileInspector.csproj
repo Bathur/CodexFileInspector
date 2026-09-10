@@ -4,7 +4,7 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>CodexFileInspector</AssemblyName>
     <RootNamespace>CodexFileInspector</RootNamespace>
-    <Version>0.2.4</Version>
+    <Version>0.2.5</Version>
     <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>

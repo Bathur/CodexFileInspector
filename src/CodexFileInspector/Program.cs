@@ -1,6 +1,7 @@
 using CodexFileInspector;
 using CodexFileInspector.Contracts;
 using CodexFileInspector.DirectoryListing;
+using CodexFileInspector.Diagnostics;
 using CodexFileInspector.Globbing;
 using CodexFileInspector.Platform;
 using CodexFileInspector.Platform.Windows;
@@ -13,16 +14,21 @@ using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 
 string assemblyVersion = typeof(Program).Assembly.GetName().Version?.ToString() ?? "0.0.0";
-if (args is ["--version"])
+DiagnosticCommandLine commandLine = DiagnosticCommandLine.Parse(args);
+if (commandLine.HostArguments is ["--version"])
 {
     Console.WriteLine($"Codex File Inspector {assemblyVersion}");
     return;
 }
 
-HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
+HostApplicationBuilder builder = Host.CreateApplicationBuilder(commandLine.HostArguments);
 
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
+
+builder.Services.AddSingleton<IDiagnosticWriter>(_ => commandLine.Enabled
+    ? new DiagnosticFileWriter(Path.Combine(AppContext.BaseDirectory, "logs"))
+    : DisabledDiagnosticWriter.Instance);
 
 builder.Services.AddSingleton<IFileSystemPlatform, WindowsFileSystemPlatform>();
 builder.Services.AddSingleton<IProcessPlatform, WindowsJobProcessPlatform>();

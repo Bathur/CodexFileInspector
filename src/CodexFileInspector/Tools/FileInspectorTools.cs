@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using CodexFileInspector.Contracts;
 using CodexFileInspector.DirectoryListing;
+using CodexFileInspector.Diagnostics;
 using CodexFileInspector.Errors;
 using CodexFileInspector.Globbing;
 using CodexFileInspector.Reading;
@@ -36,13 +37,14 @@ public static class FileInspectorTools
         int line_count = ToolBudgets.ReadFileLineCountDefault,
         CancellationToken cancellationToken = default)
     {
+        ReadFileRequest arguments = new(path, start_line, line_count);
         try
         {
             ToolRequestValidator validator = services.GetRequiredService<ToolRequestValidator>();
             ReadFileService reader = services.GetRequiredService<ReadFileService>();
-            ReadFileRequest request = validator.Validate(new ReadFileRequest(path, start_line, line_count));
+            ReadFileRequest request = validator.Validate(arguments);
             ReadFileOutput output = await reader.ReadAsync(request, cancellationToken).ConfigureAwait(false);
-            return ToolResultFactory.Create(output, ToolJsonContext.Default.ReadFileOutput);
+            return ToolDiagnostics.CreateResult(output, ToolJsonContext.Default.ReadFileOutput, services, "read_file", arguments);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -56,7 +58,7 @@ public static class FileInspectorTools
                 Status = ToolStatus.Error,
                 Error = ToolExceptionMapper.Map(exception, path),
             };
-            return ToolResultFactory.Create(output, ToolJsonContext.Default.ReadFileOutput);
+            return ToolDiagnostics.CreateResult(output, ToolJsonContext.Default.ReadFileOutput, services, "read_file", arguments, exception);
         }
     }
 
@@ -80,14 +82,14 @@ public static class FileInspectorTools
         int max_entries = ToolBudgets.ListDirectoryEntriesDefault,
         CancellationToken cancellationToken = default)
     {
+        ListDirectoryRequest arguments = new(path, result_offset, max_entries);
         try
         {
             ToolRequestValidator validator = services.GetRequiredService<ToolRequestValidator>();
             ListDirectoryService lister = services.GetRequiredService<ListDirectoryService>();
-            ListDirectoryRequest request = validator.Validate(
-                new ListDirectoryRequest(path, result_offset, max_entries));
+            ListDirectoryRequest request = validator.Validate(arguments);
             ListDirectoryOutput output = lister.List(request, cancellationToken);
-            return ToolResultFactory.Create(output, ToolJsonContext.Default.ListDirectoryOutput);
+            return ToolDiagnostics.CreateResult(output, ToolJsonContext.Default.ListDirectoryOutput, services, "list_directory", arguments);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -101,7 +103,7 @@ public static class FileInspectorTools
                 Status = ToolStatus.Error,
                 Error = ToolExceptionMapper.Map(exception, path),
             };
-            return ToolResultFactory.Create(output, ToolJsonContext.Default.ListDirectoryOutput);
+            return ToolDiagnostics.CreateResult(output, ToolJsonContext.Default.ListDirectoryOutput, services, "list_directory", arguments, exception);
         }
     }
 
@@ -135,21 +137,16 @@ public static class FileInspectorTools
         int max_results = ToolBudgets.GlobResultsDefault,
         CancellationToken cancellationToken = default)
     {
+        GlobRequest arguments = new(
+            path, include_globs, exclude_globs, case_sensitive, include_hidden,
+            respect_ignore_files, result_offset, max_results);
         try
         {
             ToolRequestValidator validator = services.GetRequiredService<ToolRequestValidator>();
             GlobService finder = services.GetRequiredService<GlobService>();
-            GlobRequest request = validator.Validate(new GlobRequest(
-                path,
-                include_globs,
-                exclude_globs,
-                case_sensitive,
-                include_hidden,
-                respect_ignore_files,
-                result_offset,
-                max_results));
+            GlobRequest request = validator.Validate(arguments);
             GlobOutput output = await finder.FindAsync(request, cancellationToken).ConfigureAwait(false);
-            return ToolResultFactory.Create(output, ToolJsonContext.Default.GlobOutput);
+            return ToolDiagnostics.CreateResult(output, ToolJsonContext.Default.GlobOutput, services, "glob", arguments);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -163,7 +160,7 @@ public static class FileInspectorTools
                 Status = ToolStatus.Error,
                 Error = ToolExceptionMapper.Map(exception, path),
             };
-            return ToolResultFactory.Create(output, ToolJsonContext.Default.GlobOutput);
+            return ToolDiagnostics.CreateResult(output, ToolJsonContext.Default.GlobOutput, services, "glob", arguments, exception);
         }
     }
 
@@ -205,25 +202,16 @@ public static class FileInspectorTools
         int max_results = ToolBudgets.GrepResultsDefault,
         CancellationToken cancellationToken = default)
     {
+        GrepRequest arguments = new(
+            path, pattern, pattern_kind, case_sensitive, output_mode, include_globs, exclude_globs,
+            include_hidden, respect_ignore_files, context_lines, result_offset, max_results);
         try
         {
             ToolRequestValidator validator = services.GetRequiredService<ToolRequestValidator>();
             GrepService searcher = services.GetRequiredService<GrepService>();
-            GrepRequest request = validator.Validate(new GrepRequest(
-                path,
-                pattern,
-                pattern_kind,
-                case_sensitive,
-                output_mode,
-                include_globs,
-                exclude_globs,
-                include_hidden,
-                respect_ignore_files,
-                context_lines,
-                result_offset,
-                max_results));
+            GrepRequest request = validator.Validate(arguments);
             GrepOutput output = await searcher.SearchAsync(request, cancellationToken).ConfigureAwait(false);
-            return ToolResultFactory.Create(output, ToolJsonContext.Default.GrepOutput);
+            return ToolDiagnostics.CreateResult(output, ToolJsonContext.Default.GrepOutput, services, "grep", arguments);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -237,7 +225,7 @@ public static class FileInspectorTools
                 Status = ToolStatus.Error,
                 Error = ToolExceptionMapper.Map(exception, path),
             };
-            return ToolResultFactory.Create(output, ToolJsonContext.Default.GrepOutput);
+            return ToolDiagnostics.CreateResult(output, ToolJsonContext.Default.GrepOutput, services, "grep", arguments, exception);
         }
     }
 

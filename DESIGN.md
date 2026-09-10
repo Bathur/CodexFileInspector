@@ -65,8 +65,31 @@ Return every OS-enumerable direct child, including hidden and ignored entries, i
 
 `max_entries` defaults to 200 and is capped at 2,000. Offset plus requested entries must not exceed 100,000; scanning is capped at 1,000,000 direct children. Enumeration/change failures cannot claim complete totals or reliable continuation.
 
+## Optional failure diagnostics
+
+The `--diagnostics` startup argument opts into internal JSONL logging; it is disabled by default and is not a tool parameter. Only a final standard `error` or `partial` result qualifies. `success`, including empty results and normal budget truncation, skips log construction and file access. Calls that fail before a standard result exists, ordinary cancellation, startup/transport failures, and forced termination are outside this capture boundary. An already-caught exception converted into a standard `internal_error` is in scope.
+
+The sink uses `Path.Combine(AppContext.BaseDirectory, "logs")`, not the Host working directory, inspected root, or `dotnet.exe` directory. It creates the directory only when the first eligible record is written. Each process/run has uniquely named files and one background writer. The internal `logs` directory itself must not be a link; if it is, the sink stops. This diagnostic-location guard does not change OS-delegated link behavior for tool inputs.
+
+Records contain time, server version, process/record identity, tool name, method-bound arguments, the existing error/warnings, and exception type/message/stack when already available at the tool boundary. Bound arguments include applied defaults and are not raw JSON-RPC requests. No read content, search excerpts, returned file collections, full result, raw ripgrep stderr, or newly collected deep service diagnostics are copied. Existing error and warning limits still apply. Paths, expressions, and exception details are not redacted.
+
+| Resource | Initial fixed limit | Behavior |
+| --- | ---: | --- |
+| Pending records | 32 | Nonblocking enqueue; discard the new record when full |
+| Encoded record | 256 KiB | Keep valid JSON and explicit field-truncation evidence |
+| Per-process file | 8 MiB | Rotate before the next record would exceed the limit; never split a record |
+| Diagnostic directory | 128 MiB | Soft retention target across this installation's diagnostic files |
+
+Argument and exception strings share a 160 KiB encoded-data budget within the total record limit, leaving space for existing standard diagnostics and truncation metadata. The encoder prioritizes an argument identified by the error. Oversize strings retain marked head/tail fragments where space permits; each shortened field reports original and retained lengths in UTF-16 code units. Glob arrays retain at most 64 entries each, with omitted item counts; the specifically identified offending item is prioritized separately. Exception chains retain at most four exception objects, including the outer exception, and mark deeper omission. These limits can lose reproduction evidence, but the JSON remains valid and omissions are explicit. The existing 4 KiB inspection-line display limit can also clip an intact JSONL record when it is read later.
+
+Only bounded encoded bytes enter the queue: pending payloads occupy at most about 8 MiB, plus queue/runtime overhead and any record being constructed or written. Non-success calls incur serialization work but do not wait for disk I/O, queue space, rotation, or shutdown draining. The writer uses ordinary asynchronous flushing without guaranteed physical-disk durability. A full queue, process exit, or file-writing failure may lose records; a crash can leave the final line incomplete. A writing failure disables the sink for that process, discards pending records, and leaves tool results unchanged. Restarting the server allows another attempt.
+
+Retention runs when opening the first or next file. It recognizes only this application's exact diagnostic filename pattern and regular, non-link files. Closed files are considered oldest `LastWriteTimeUtc` first, with ordinal filename order as the tie-breaker. Active files cannot be deleted through their open handles; unrelated files remain untouched. Active files, deletion failures, and growth between cleanups can keep usage above the soft target. There is no periodic sweeper, strict cross-process quota, or automatic cleanup of another installation's directory.
+
+The four tool APIs, canonical result schemas/budgets, and annotations remain unchanged: `readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`, and `openWorldHint=false`. These describe the requested inspection operation, which never mutates target data. With diagnostics enabled, replaying a non-success may append another internal record and trigger retention in the fixed log directory. That internal diagnostic write is the narrow exception to having no side effects; it does not add a file-mutation tool or permission system.
+
 ## Deliberately omitted
 
-No multi-file batch reader, standalone metadata tool, media reader, semantic search, file mutation, or arbitrary process tool. Independent reads can be called concurrently. Unknown-length log tails and arbitrary later segments of clipped long lines remain consumer-policy exceptions outside this basic tool surface.
+No multi-file batch reader, standalone metadata tool, media reader, semantic search, file-mutation tool, or arbitrary process tool. Independent reads can be called concurrently. Unknown-length log tails and arbitrary later segments of clipped long lines remain consumer-policy exceptions outside this basic tool surface.
 
 These choices reflect a bounded personal tool, not a claim that every agent should use an identical schema. The test suite includes real-engine boundary cases and actual STDIO metadata checks; passing it is not proof of bug-free behavior or independent security review.

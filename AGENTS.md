@@ -1,6 +1,8 @@
 # Repository instructions
 
 - Preserve the four-tool surface: `read_file`, `grep`, `glob`, `list_directory`. Keep inspected filesystem operations strictly read-only.
+- Optional internal diagnostics are the narrow write exception: `--diagnostics` enables JSONL under `AppContext.BaseDirectory/logs`, only for final standard `error` and `partial` results. Leave it disabled by default; do not log successful calls or add SDK/protocol/startup/cancellation capture. Preserve tool APIs, results, annotations, and the read-only target boundary.
+- Preserve the bounded best-effort sink: 32 queued records, 256 KiB encoded records with explicit truncation, 8 MiB per-process files, and a 128 MiB soft retention target for owned closed logs. Tool calls must not wait for disk I/O or queue draining, and logging failure must not alter results. Do not replace this approved internal logging with a file-mutation tool, deep service tracing, or a successful-call trail. See [DESIGN.md](DESIGN.md#optional-failure-diagnostics).
 - The final contract is documented in [DESIGN.md](DESIGN.md). Do not change public semantics, output budgets, direct-only exposure, or license terms without an explicit request.
 - `read_file` returns logical text without injected line-number prefixes. Grep remains location-oriented and numbered.
 - Concrete paths are fully qualified Windows absolute paths. Globs are relative to the explicit search root. Use native ripgrep hidden/ignore precedence, explicit excludes first, no global ripgrep configuration, and no `--follow`.
