@@ -226,7 +226,9 @@ internal sealed class BoundedLogicalLineReader(Encoding encoding)
             _totalUtf8Bytes = checked(_totalUtf8Bytes + runeBytes);
             if (!_prefixClosed && _visibleUtf8Bytes + runeBytes <= ToolBudgets.LineExcerptBytes)
             {
-                _visiblePrefix.Append(rune);
+                Span<char> utf16 = stackalloc char[2];
+                int written = rune.EncodeToUtf16(utf16);
+                _visiblePrefix.Append(utf16[..written]);
                 _visibleUtf8Bytes += runeBytes;
             }
             else

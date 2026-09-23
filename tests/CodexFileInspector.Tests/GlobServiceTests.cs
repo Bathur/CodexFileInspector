@@ -201,6 +201,50 @@ public sealed class GlobServiceTests
             ToolBudgets.CanonicalResultBytes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Minimum_path_budget_failure_never_returns_a_zero_progress_success(bool incomplete)
+    {
+        string root = @"C:\" + string.Join('\\', Enumerable.Repeat(new string('x', 200), 80)) +
+            "\\" + new string('y', 170);
+        string path = root + "\\a";
+        OutputBudget.EnsurePathFits(root);
+        OutputBudget.EnsurePathFits(path);
+        TestFileSystemPlatform platform = new() { Attributes = FileAttributes.Directory };
+        TestRipgrepRunner runner = new()
+        {
+            Records = [Encoding.UTF8.GetBytes(path)],
+            ExitCode = incomplete ? 2 : 0,
+            StandardError = incomplete ? "rg: C:\\other: Access is denied. (os error 5)" : string.Empty,
+        };
+        GlobService service = new(platform, new RipgrepInvocationBuilder(platform), runner);
+        GlobRequest request = new(root, ["**/*"]);
+
+        if (!incomplete)
+        {
+            ToolExecutionException exception = await Assert.ThrowsAsync<ToolExecutionException>(async () =>
+                await service.FindAsync(request, CancellationToken.None));
+
+            Assert.Equal(ToolErrorCodes.OutputRecordTooLarge, exception.Code);
+            return;
+        }
+
+        GlobOutput output = await service.FindAsync(request, CancellationToken.None);
+
+        Assert.Equal(ToolStatus.Partial, output.Status);
+        Assert.Empty(output.Paths!);
+        Assert.Equal(0, output.ReturnedResults);
+        Assert.Null(output.TotalResults);
+        Assert.Null(output.HasMore);
+        Assert.Null(output.NextResultOffset);
+        Assert.NotEmpty(output.Warnings!);
+        Assert.InRange(
+            ToolResultFactory.GetCanonicalByteCount(output, ToolJsonContext.Default.GlobOutput),
+            1,
+            ToolBudgets.CanonicalResultBytes);
+    }
+
     [Fact]
     public async Task Traversal_exit_two_returns_partial_paths_and_no_continuation()
     {
@@ -209,7 +253,7 @@ public sealed class GlobServiceTests
         {
             Records = [Encoding.UTF8.GetBytes(@"C:\root\a.txt")],
             ExitCode = 2,
-            StandardError = "synthetic access failure",
+            StandardError = "rg: C:\\root\\locked: Access is denied. (os error 5)",
         };
         GlobService service = new(platform, new RipgrepInvocationBuilder(platform), runner);
 

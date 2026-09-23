@@ -35,6 +35,7 @@ No tool takes a timeout argument and the server has no hard-coded call deadline.
 
 - One file; 1-based `start_line` defaults to 1; `line_count` defaults to 200 and is capped at 2,000.
 - Returns decoded logical text with no injected line numbers or numbering switch. This is not a byte-preserving transfer API: decoding, logical newline handling, and explicit limits apply.
+- Recognizes LF, CRLF, bare CR, and mixtures of these as logical line endings. Grep's bare-CR handling has the limitation described below.
 - Empty files succeed; a non-empty requested range starting past EOF is a typed error. `total_lines` appears only when known without extra full-file work.
 - `has_more` describes later logical lines; `next_start_line` continues a bounded read. `line_truncations` separately marks text clipped within a returned line. Each visible line excerpt is bounded at 4 KiB UTF-8.
 - Strict UTF-8 and supported BOM-marked UTF-16 decoding; no code-page guessing or media decoding. Material changes or decoding failures do not return mixed partial file content.
@@ -57,13 +58,19 @@ No tool takes a timeout argument and the server has no hard-coded call deadline.
 - Reject absolute, backslash-separated, `..`-traversing, empty, and leading-`!` patterns. Use `exclude_globs` for exclusions. Multiple includes form a union; explicit excludes win.
 - Use native ripgrep precedence: explicit include globs and loaded ignore-file allow rules may override default hidden filtering. On Windows, hidden covers dot names and the Hidden attribute. Matching a hidden file does not necessarily whitelist its hidden parent directory.
 - `include_hidden=true` disables default hidden filtering, not ignore/exclude rules. `respect_ignore_files=false` disables ignore-file rules, including allow rules, without implying `--hidden`.
-- Applicable project and same-repository parent ignore rules are respected by default; global ignore configuration is disabled. Recursive traversal never enables link following; named roots use normal OS behavior.
+- Project ignore rules are respected by default; global ignore configuration is disabled. Isolation of parent rules to the same repository is incomplete in this version; see [known limitations](#known-limitations). Recursive traversal never enables link following; named roots use normal OS behavior.
 
 ## `list_directory`
 
 Return every OS-enumerable direct child, including hidden and ignored entries, in stable ordinal name order. Each entry has exact name, logical absolute path, and `file`, `directory`, `link`, or `other` kind. There is no recursion, filtering, target resolution, or detailed stat output.
 
 `max_entries` defaults to 200 and is capped at 2,000. Offset plus requested entries must not exceed 100,000; scanning is capped at 1,000,000 direct children. Enumeration/change failures cannot claim complete totals or reliable continuation.
+
+## Known limitations
+
+- **Parent ignore sources:** the intended boundary is local and same-repository parent rules, but ancestor `.gitignore`, `.ignore`, or `.rgignore` files outside the nearest repository can still affect recursive results. A query can return `success` with files filtered out by those rules. For a targeted check, `respect_ignore_files=false` disables their influence together with legitimate project ignore rules; use appropriate include/exclude filters and consider hidden traversal separately. An include that matches a file does not necessarily restore traversal of its ignored parent directory.
+- **Bare-CR text in grep:** LF and CRLF searches are supported. Unlike `read_file`, grep does not consistently treat bare CR as a logical line separator. For CR-only text or mixtures containing bare CR, matching-line counts, line numbers, anchors, context, and pagination can differ from the line structure returned by `read_file`. The CRLF correction does not provide complete bare-CR support.
+- **Long search working directories:** grep/glob use the requested directory, or the parent of a directly named grep file, as ripgrep's working directory. Windows can reject startup for a long cwd even when `read_file` or `list_directory` can access it. A native process-start failure with a normalized cwd of at least 250 UTF-16 units receives possible-length-related guidance and `retryable=false` only when its existing classification is ordinary `io_error`; the original native code and logical path remain. This is a failed-call recovery heuristic, not a new path validity limit or proof of the cause. The server does not shorten cwd or rewrite globs. A shorter existing ancestor may be used as a new query root, with filters adjusted relative to it and their effect rechecked; direct reading or directory listing may suffice for a smaller task.
 
 ## Optional failure diagnostics
 
@@ -90,6 +97,6 @@ The four tool APIs, canonical result schemas/budgets, and annotations remain unc
 
 ## Deliberately omitted
 
-No multi-file batch reader, standalone metadata tool, media reader, semantic search, file-mutation tool, or arbitrary process tool. Independent reads can be called concurrently. Unknown-length log tails and arbitrary later segments of clipped long lines remain consumer-policy exceptions outside this basic tool surface.
+No multi-file batch reader, standalone metadata tool, media reader, semantic search, file-mutation tool, or arbitrary process tool. Independent reads can be called concurrently. Unknown-length log tails and arbitrary later segments of clipped long lines are examples of tasks outside this basic tool surface. Choosing between File Inspector and Shell follows the consumer policy selected from [README.md](README.md#install-in-codex), rather than a fixed list of exceptions. The server itself continues to launch bundled ripgrep directly, without a Shell.
 
 These choices reflect a bounded personal tool, not a claim that every agent should use an identical schema. The test suite includes real-engine boundary cases and actual STDIO metadata checks; passing it is not proof of bug-free behavior or independent security review.

@@ -36,6 +36,16 @@ internal sealed class ToolRequestValidator(IFileSystemPlatform fileSystem)
     public GrepRequest Validate(GrepRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (request.PatternKind is not (PatternKind.Literal or PatternKind.Regex))
+        {
+            throw Invalid("pattern_kind", "pattern_kind must be literal or regex.");
+        }
+
+        if (request.OutputMode is not (GrepOutputMode.Matches or GrepOutputMode.FilesWithMatches or GrepOutputMode.Count))
+        {
+            throw Invalid("output_mode", "output_mode must be matches, files_with_matches, or count.");
+        }
+
         if (string.IsNullOrEmpty(request.Pattern) ||
             request.Pattern.ContainsAny('\r', '\n') ||
             request.Pattern.Contains('\0'))
@@ -59,6 +69,11 @@ internal sealed class ToolRequestValidator(IFileSystemPlatform fileSystem)
     public GlobRequest Validate(GlobRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (request.IncludeGlobs is null)
+        {
+            throw Invalid("include_globs", "include_globs must contain at least one pattern.");
+        }
+
         ValidateInclusiveRange(request.ResultOffset, 0, ToolBudgets.SearchResultOffsetMaximum, "result_offset");
         ValidateInclusiveRange(request.MaxResults, 1, ToolBudgets.GlobMaximumResults, "max_results");
         ValidateGlobSet(request.IncludeGlobs, request.ExcludeGlobs ?? [], requireInclude: true);

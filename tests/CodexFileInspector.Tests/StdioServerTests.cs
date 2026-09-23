@@ -8,6 +8,50 @@ namespace CodexFileInspector.Tests;
 
 public sealed class StdioServerTests
 {
+    [Theory]
+    [InlineData("empty")]
+    [InlineData("valid")]
+    [InlineData("malformed")]
+    [InlineData("environment")]
+    public async Task Consumer_application_configuration_does_not_affect_server_startup(string configuration)
+    {
+        using TestWorkspace workspace = new();
+        string content = configuration == "valid"
+            ? "{\"Logging\":{\"LogLevel\":{\"Default\":\"None\"}}}"
+            : "{ not valid JSON";
+        if (configuration != "empty")
+        {
+            string name = configuration == "environment" ? "appsettings.Audit.json" : "appsettings.json";
+            await File.WriteAllTextAsync(workspace.PathFor(name), content);
+        }
+
+        string input = workspace.PathFor("sample.txt");
+        await File.WriteAllTextAsync(input, "readable from an unrelated cwd");
+        StdioClientTransportOptions transportOptions = new()
+        {
+            Name = "Codex File Inspector consumer configuration regression",
+            Command = ResolveServerExecutable(),
+            WorkingDirectory = workspace.Root,
+            InheritEnvironmentVariables = false,
+            EnvironmentVariables = StdioClientTransportOptions.GetDefaultEnvironmentVariables(),
+            ShutdownTimeout = TimeSpan.FromSeconds(5),
+        };
+        transportOptions.EnvironmentVariables["DOTNET_ENVIRONMENT"] = "Audit";
+
+        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(15));
+        await using McpClient client = await McpClient.CreateAsync(
+            new StdioClientTransport(transportOptions), cancellationToken: timeout.Token);
+
+        IList<McpClientTool> tools = await client.ListToolsAsync(cancellationToken: timeout.Token);
+        Assert.Equal(["glob", "grep", "list_directory", "read_file"],
+            tools.Select(tool => tool.Name).Order(StringComparer.Ordinal));
+        AssertWireMetadata(client, tools);
+        CallToolResult result = await client.CallToolAsync("read_file",
+            new Dictionary<string, object?> { ["path"] = input }, cancellationToken: timeout.Token);
+        Assert.False(result.IsError);
+        Assert.Equal("readable from an unrelated cwd", result.StructuredContent?.GetProperty("content").GetString());
+    }
+
     [Fact]
     public async Task Server_negotiates_and_invokes_all_four_tools_over_stdio()
     {

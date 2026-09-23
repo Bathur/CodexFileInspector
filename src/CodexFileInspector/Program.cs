@@ -21,7 +21,14 @@ if (commandLine.HostArguments is ["--version"])
     return;
 }
 
-HostApplicationBuilder builder = Host.CreateApplicationBuilder(commandLine.HostArguments);
+// A consumer's working directory and appsettings belong to the inspected
+// project. The stdio server has no application configuration files to load.
+HostApplicationBuilder builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+{
+    Args = commandLine.HostArguments,
+    DisableDefaults = true,
+    ContentRootPath = AppContext.BaseDirectory,
+});
 
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);

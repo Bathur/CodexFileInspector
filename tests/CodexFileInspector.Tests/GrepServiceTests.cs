@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using CodexFileInspector.Contracts;
 using CodexFileInspector.Errors;
 using CodexFileInspector.Platform.Windows;
@@ -350,23 +351,160 @@ public sealed class GrepServiceTests
             ToolBudgets.CanonicalResultBytes);
     }
 
-    [Fact]
-    public async Task Match_payload_budget_drops_trailing_result_units_with_continuation()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(20)]
+    public async Task Match_payload_budget_drops_trailing_result_units_with_continuation(int contextLines)
     {
         using TestWorkspace workspace = CreateFixtureRepository();
         string line = "MATCH" + new string('\u0001', 3990);
         File.WriteAllText(workspace.PathFor("large-matches.txt"), string.Join('\n', Enumerable.Repeat(line, 10)));
 
-        GrepOutput output = await Search(
+        List<long> returnedLines = [];
+        int offset = 0;
+        for (int page = 0; page < 10; page++)
+        {
+            GrepOutput output = await Search(
+                workspace.Root,
+                "MATCH",
+                PatternKind.Literal,
+                contextLines: contextLines,
+                resultOffset: offset,
+                maxResults: 10);
+
+            Assert.Equal(ToolStatus.Success, output.Status);
+            Assert.Equal(1, output.ReturnedResults);
+            returnedLines.AddRange(output.Blocks!.SelectMany(block => block.MatchLines)
+                .Select(match => match.LineNumber));
+            Assert.InRange(
+                ToolResultFactory.GetCanonicalByteCount(output, ToolJsonContext.Default.GrepOutput),
+                1,
+                ToolBudgets.CanonicalResultBytes);
+            if (contextLines > 0)
+            {
+                Assert.Contains(output.Blocks!, block => block.ContextTruncated);
+            }
+
+            if (output.HasMore is not true)
+            {
+                Assert.Null(output.NextResultOffset);
+                break;
+            }
+
+            Assert.Equal("byte_budget", output.TruncatedBy);
+            Assert.Equal(offset + output.ReturnedResults, output.NextResultOffset);
+            Assert.True(output.NextResultOffset > offset);
+            offset = output.NextResultOffset!.Value;
+        }
+
+        Assert.Equal(Enumerable.Range(1, 10).Select(index => (long)index), returnedLines);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Match_pages_keep_the_ripgrep_file_order_with_mixed_case_and_unicode(bool byteBudget)
+    {
+        using TestWorkspace workspace = CreateFixtureRepository();
+        string[] names = ["a.txt", "B.txt", "c.txt", "é.txt", "中.txt"];
+        foreach (string name in names)
+        {
+            File.WriteAllText(workspace.PathFor(name), "MATCH");
+        }
+
+        GrepOutput files = await Search(
             workspace.Root,
             "MATCH",
             PatternKind.Literal,
-            maxResults: 10);
+            outputMode: GrepOutputMode.FilesWithMatches);
+        GrepOutput whole = await Search(workspace.Root, "MATCH", PatternKind.Literal);
+        Assert.Equal(files.Paths, whole.Blocks!.Select(block => block.Path));
 
-        Assert.Equal("byte_budget", output.TruncatedBy);
-        Assert.True(output.HasMore);
-        Assert.InRange(output.ReturnedResults!.Value, 1, 9);
-        Assert.Equal(output.ReturnedResults, output.NextResultOffset);
+        if (byteBudget)
+        {
+            string line = "MATCH" + new string('\u0001', 3990);
+            foreach (string name in names)
+            {
+                File.WriteAllText(workspace.PathFor(name), line);
+            }
+        }
+
+        List<string> returnedPaths = [];
+        int offset = 0;
+        for (int page = 0; page < names.Length; page++)
+        {
+            GrepOutput output = await Search(
+                workspace.Root,
+                "MATCH",
+                PatternKind.Literal,
+                resultOffset: offset,
+                maxResults: byteBudget ? names.Length : 1);
+            returnedPaths.AddRange(output.Blocks!.Select(block => block.Path));
+            Assert.Equal(1, output.ReturnedResults);
+            if (output.HasMore is not true)
+            {
+                Assert.Null(output.NextResultOffset);
+                break;
+            }
+
+            Assert.Equal(byteBudget ? "byte_budget" : "result_limit", output.TruncatedBy);
+            Assert.Equal(offset + 1, output.NextResultOffset);
+            offset = output.NextResultOffset!.Value;
+        }
+
+        Assert.Equal(files.Paths, returnedPaths);
+    }
+
+    [Theory]
+    [InlineData(GrepOutputMode.FilesWithMatches, false)]
+    [InlineData(GrepOutputMode.FilesWithMatches, true)]
+    [InlineData(GrepOutputMode.Count, false)]
+    [InlineData(GrepOutputMode.Count, true)]
+    public async Task Minimum_record_budget_failure_never_returns_a_zero_progress_success(
+        GrepOutputMode outputMode,
+        bool incomplete)
+    {
+        string root = NearRecordLimitRoot();
+        string path = root + "\\a";
+        OutputBudget.EnsurePathFits(root);
+        OutputBudget.EnsurePathFits(path);
+        Assert.InRange(
+            JsonSerializer.SerializeToUtf8Bytes(new GrepFileCount(path, 1, 1)).Length,
+            1,
+            ToolBudgets.PathRecordBytes);
+        TestFileSystemPlatform platform = new() { Attributes = FileAttributes.Directory };
+        TestRipgrepRunner runner = new()
+        {
+            Records = CreateSingleMatchEvents(path, "MATCH"),
+            ExitCode = incomplete ? 2 : 0,
+            StandardError = incomplete ? "rg: C:\\other: Access is denied. (os error 5)" : string.Empty,
+        };
+        GrepService service = new(platform, new RipgrepInvocationBuilder(platform), runner);
+        GrepRequest request = new(root, "MATCH", PatternKind.Literal, OutputMode: outputMode);
+
+        if (!incomplete)
+        {
+            ToolExecutionException exception = await Assert.ThrowsAsync<ToolExecutionException>(async () =>
+                await service.SearchAsync(request, CancellationToken.None));
+
+            Assert.Equal(ToolErrorCodes.OutputRecordTooLarge, exception.Code);
+            return;
+        }
+
+        GrepOutput output = await service.SearchAsync(request, CancellationToken.None);
+
+        Assert.Equal(ToolStatus.Partial, output.Status);
+        Assert.Equal(0, output.ReturnedResults);
+        Assert.Null(output.TotalResults);
+        Assert.Null(output.HasMore);
+        Assert.Null(output.NextResultOffset);
+        Assert.NotEmpty(output.Warnings!);
+        Assert.InRange(
+            ToolResultFactory.GetCanonicalByteCount(output, ToolJsonContext.Default.GrepOutput),
+            1,
+            ToolBudgets.CanonicalResultBytes);
     }
 
     [Fact]
@@ -400,7 +538,7 @@ public sealed class GrepServiceTests
         {
             Records = CreateSingleMatchEvents(@"C:\root\a.txt", "MATCH"),
             ExitCode = 2,
-            StandardError = "synthetic access failure",
+            StandardError = "rg: C:\\root\\locked.txt: Access is denied. (os error 5)",
         };
         GrepService service = new(platform, new RipgrepInvocationBuilder(platform), runner);
 
@@ -419,6 +557,9 @@ public sealed class GrepServiceTests
         .Distinct(StringComparer.Ordinal)
         .Order(StringComparer.Ordinal)
         .ToArray();
+
+    private static string NearRecordLimitRoot() => @"C:\" +
+        string.Join('\\', Enumerable.Repeat(new string('x', 200), 80)) + "\\" + new string('y', 170);
 
     private static IReadOnlyList<byte[]> CreateSingleMatchEvents(string path, string line)
     {

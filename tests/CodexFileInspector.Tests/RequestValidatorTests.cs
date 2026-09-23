@@ -19,6 +19,126 @@ public sealed class RequestValidatorTests
         Assert.Equal(200, result.LineCount);
     }
 
+    [Theory]
+    [InlineData(@"\\?\C:\work\file.txt")]
+    [InlineData("//?/C:/work/file.txt")]
+    [InlineData(@"\/?\C:/work/file.txt")]
+    [InlineData(@"\\.\C:\work\file.txt")]
+    [InlineData("//./C:/work/file.txt")]
+    [InlineData(@"/\./C:/work/file.txt")]
+    [InlineData(@"\??\C:\work\file.txt")]
+    [InlineData("/??/C:/work/file.txt")]
+    [InlineData(@"\\??\C:\work\file.txt")]
+    [InlineData("//??/C:/work/file.txt")]
+    public void Concrete_paths_reject_device_namespaces_with_any_separator_style(string path)
+    {
+        Assert.All<Action>(
+            [
+                () => _validator.Validate(new ReadFileRequest(path)),
+                () => _validator.Validate(new GrepRequest(path, "value", PatternKind.Literal)),
+                () => _validator.Validate(new GlobRequest(path, ["*.txt"])),
+                () => _validator.Validate(new ListDirectoryRequest(path)),
+            ],
+            validate =>
+            {
+                PathValidationException exception = Assert.Throws<PathValidationException>(validate);
+                ToolError error = ToolExceptionMapper.Map(exception, path);
+                Assert.Equal(ToolErrorCodes.InvalidPath, error.Code);
+                Assert.Equal("path", error.Field);
+                Assert.False(error.Retryable);
+            });
+    }
+
+    [Theory]
+    [InlineData("C:/work/child/../file.txt", @"C:\work\file.txt")]
+    [InlineData(@"Z:\work/file.txt", @"Z:\work\file.txt")]
+    [InlineData("//server/share/work/file.txt", @"\\server\share\work\file.txt")]
+    [InlineData(@"\/server\share/work/file.txt", @"\\server\share\work\file.txt")]
+    public void Concrete_paths_preserve_ordinary_drive_and_unc_normalization(string path, string expected)
+    {
+        Assert.Equal(expected, _validator.Validate(new ReadFileRequest(path)).Path);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(999)]
+    [InlineData(int.MaxValue)]
+    public void Grep_rejects_undefined_pattern_kind_before_path_validation(int value)
+    {
+        ToolValidationException exception = Assert.Throws<ToolValidationException>(() => _validator.Validate(
+            new GrepRequest("relative-path", "value", (PatternKind)value)));
+
+        ToolError error = ToolExceptionMapper.Map(exception, null);
+        Assert.Equal(ToolErrorCodes.InvalidArgument, error.Code);
+        Assert.Equal("pattern_kind", error.Field);
+        Assert.False(error.Retryable);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(999)]
+    [InlineData(int.MaxValue)]
+    public void Grep_rejects_undefined_output_mode_before_path_validation(int value)
+    {
+        ToolValidationException exception = Assert.Throws<ToolValidationException>(() => _validator.Validate(
+            new GrepRequest("relative-path", "value", PatternKind.Literal, OutputMode: (GrepOutputMode)value)));
+
+        ToolError error = ToolExceptionMapper.Map(exception, null);
+        Assert.Equal(ToolErrorCodes.InvalidArgument, error.Code);
+        Assert.Equal("output_mode", error.Field);
+        Assert.False(error.Retryable);
+    }
+
+    [Theory]
+    [InlineData(PatternKind.Literal, GrepOutputMode.Matches)]
+    [InlineData(PatternKind.Literal, GrepOutputMode.FilesWithMatches)]
+    [InlineData(PatternKind.Literal, GrepOutputMode.Count)]
+    [InlineData(PatternKind.Regex, GrepOutputMode.Matches)]
+    [InlineData(PatternKind.Regex, GrepOutputMode.FilesWithMatches)]
+    [InlineData(PatternKind.Regex, GrepOutputMode.Count)]
+    public void Grep_accepts_declared_modes_and_omitted_optional_globs(PatternKind patternKind, GrepOutputMode mode)
+    {
+        GrepRequest request = new(@"C:\work", "value", patternKind, OutputMode: mode);
+
+        Assert.Equal(request, _validator.Validate(request));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Glob_rejects_null_or_empty_required_includes(bool useNull)
+    {
+        IReadOnlyList<string>? includes = useNull ? null : [];
+        ToolValidationException exception = Assert.Throws<ToolValidationException>(() => _validator.Validate(
+            new GlobRequest(@"C:\work", includes!)));
+
+        ToolError error = ToolExceptionMapper.Map(exception, null);
+        Assert.Equal(ToolErrorCodes.InvalidArgument, error.Code);
+        Assert.Equal("include_globs", error.Field);
+        Assert.False(error.Retryable);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void Glob_rejects_null_or_empty_pattern_with_its_index(string? pattern)
+    {
+        ToolValidationException exception = Assert.Throws<ToolValidationException>(() => _validator.Validate(
+            new GlobRequest(@"C:\work", ["*.txt", pattern!])));
+
+        Assert.Equal(ToolErrorCodes.InvalidPattern, exception.Code);
+        Assert.Equal("include_globs", exception.Field);
+        Assert.Equal(1, exception.Index);
+    }
+
+    [Fact]
+    public void Glob_accepts_valid_required_includes_and_omitted_excludes()
+    {
+        GlobRequest request = new(@"C:\work", ["*.txt"]);
+
+        Assert.Equal(request, _validator.Validate(request));
+    }
+
     [Fact]
     public void Grep_rejects_context_for_non_match_mode()
     {

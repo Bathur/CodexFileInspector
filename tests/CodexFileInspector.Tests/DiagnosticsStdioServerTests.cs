@@ -11,8 +11,10 @@ namespace CodexFileInspector.Tests;
 
 public sealed class DiagnosticsStdioServerTests
 {
-    [Fact]
-    public async Task Diagnostics_are_opt_in_and_record_only_non_success_without_changing_wire_results()
+    [Theory]
+    [InlineData("2025-06-18")]
+    [InlineData("2026-07-28")]
+    public async Task Diagnostics_are_opt_in_and_record_only_non_success_without_changing_wire_results(string protocolVersion)
     {
         using IsolatedServer disabled = new();
         using IsolatedServer enabled = new();
@@ -25,8 +27,8 @@ public sealed class DiagnosticsStdioServerTests
             "MATCH\n" + new string('x', 128 * 1024) + "\n\0tail\n"));
 
         using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(45));
-        await using McpClient baseline = await disabled.StartAsync(diagnostics: false, timeout.Token);
-        await using McpClient diagnostic = await enabled.StartAsync(diagnostics: true, timeout.Token);
+        await using McpClient baseline = await disabled.StartAsync(diagnostics: false, timeout.Token, protocolVersion);
+        await using McpClient diagnostic = await enabled.StartAsync(diagnostics: true, timeout.Token, protocolVersion);
 
         ToolCall[] successfulCalls =
         [
@@ -291,7 +293,7 @@ public sealed class DiagnosticsStdioServerTests
         public string LogDirectory { get; }
         public string WorkingDirectory { get; }
 
-        public async Task<McpClient> StartAsync(bool diagnostics, CancellationToken cancellationToken)
+        public async Task<McpClient> StartAsync(bool diagnostics, CancellationToken cancellationToken, string? protocolVersion = null)
         {
             StdioClientTransportOptions options = new()
             {
@@ -304,7 +306,9 @@ public sealed class DiagnosticsStdioServerTests
                 ShutdownTimeout = TimeSpan.FromSeconds(5),
                 StandardErrorLines = _standardError.Enqueue,
             };
-            McpClient client = await McpClient.CreateAsync(new StdioClientTransport(options), cancellationToken: cancellationToken);
+            McpClientOptions? clientOptions = protocolVersion is null ? null : new() { ProtocolVersion = protocolVersion };
+            McpClient client = await McpClient.CreateAsync(
+                new StdioClientTransport(options), clientOptions, cancellationToken: cancellationToken);
             try
             {
                 _process = FindServerProcess();

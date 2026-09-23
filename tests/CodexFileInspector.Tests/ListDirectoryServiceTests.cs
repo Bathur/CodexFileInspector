@@ -252,6 +252,51 @@ public sealed class ListDirectoryServiceTests
             ToolBudgets.CanonicalResultBytes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Minimum_entry_budget_failure_never_returns_a_zero_progress_success(bool incomplete)
+    {
+        string root = @"C:\" + string.Join('\\', Enumerable.Repeat(new string('x', 200), 80)) +
+            "\\" + new string('y', 170);
+        string path = root + "\\a";
+        OutputBudget.EnsurePathFits(root);
+        Assert.True(OutputBudget.EntryFits(new DirectoryEntry("a", path, DirectoryEntryKind.File), out _));
+        TestFileSystemPlatform platform = new()
+        {
+            Attributes = FileAttributes.Directory,
+            Entries = [new FileSystemEntrySnapshot("a", path, DirectoryEntryKind.File)],
+            DirectoryStampAfter = new DirectoryChangeStamp(
+                DateTime.UnixEpoch,
+                incomplete ? DateTime.UnixEpoch.AddSeconds(1) : DateTime.UnixEpoch),
+        };
+        ListDirectoryService service = new(platform);
+        ListDirectoryRequest request = new(root);
+
+        if (!incomplete)
+        {
+            ToolExecutionException exception = Assert.Throws<ToolExecutionException>(
+                () => service.List(request, CancellationToken.None));
+
+            Assert.Equal(ToolErrorCodes.OutputRecordTooLarge, exception.Code);
+            return;
+        }
+
+        ListDirectoryOutput output = service.List(request, CancellationToken.None);
+
+        Assert.Equal(ToolStatus.Partial, output.Status);
+        Assert.Empty(output.Entries!);
+        Assert.Equal(0, output.ReturnedEntries);
+        Assert.Null(output.TotalEntries);
+        Assert.Null(output.HasMore);
+        Assert.Null(output.NextResultOffset);
+        Assert.NotEmpty(output.Warnings!);
+        Assert.InRange(
+            ToolResultFactory.GetCanonicalByteCount(output, ToolJsonContext.Default.ListDirectoryOutput),
+            1,
+            ToolBudgets.CanonicalResultBytes);
+    }
+
     [Fact]
     public void Cancellation_propagates_from_directory_enumeration()
     {

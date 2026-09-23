@@ -13,6 +13,7 @@ internal sealed class ReadFileService(IFileSystemPlatform fileSystem)
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
         OutputBudget.EnsurePathFits(request.Path);
 
         FileAttributes attributes = fileSystem.GetAttributes(request.Path);
@@ -61,7 +62,9 @@ internal sealed class ReadFileService(IFileSystemPlatform fileSystem)
             readFailure = exception;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         VerifyUnchanged(request.Path, stream, before);
+        cancellationToken.ThrowIfCancellationRequested();
         if (readFailure is not null)
         {
             ExceptionDispatchInfo.Capture(readFailure).Throw();
@@ -81,7 +84,8 @@ internal sealed class ReadFileService(IFileSystemPlatform fileSystem)
                 totalLines: 0,
                 hasMore: false,
                 stopReason: "end_of_file");
-            EnsureOutputFits(empty);
+            EnsureOutputFits(empty, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             return empty;
         }
 
@@ -90,10 +94,31 @@ internal sealed class ReadFileService(IFileSystemPlatform fileSystem)
             throw RangePastEnd(request.Path, linesSeen);
         }
 
-        bool hasMore = captured.Count > request.LineCount;
-        List<CapturedLine> returned = captured.Take(request.LineCount).ToList();
+        // JSON cannot encode text more compactly than its UTF-8 bytes. Exclude
+        // prefixes that cannot possibly fit before joining or serializing them;
+        // escaping and the result envelope are checked exactly below.
+        int requestedCount = Math.Min(captured.Count, request.LineCount);
+        int possibleCount = 0;
+        int contentBytes = 0;
+        while (possibleCount < requestedCount)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int lineBytes = Encoding.UTF8.GetByteCount(captured[possibleCount].Text);
+            int candidateBytes = contentBytes + lineBytes + (possibleCount == 0 ? 0 : 1);
+            if (candidateBytes > ToolBudgets.CanonicalResultBytes)
+            {
+                break;
+            }
+
+            contentBytes = candidateBytes;
+            possibleCount++;
+        }
+
+        bool truncatedByByteBudget = possibleCount < requestedCount;
+        bool hasMore = truncatedByByteBudget || captured.Count > request.LineCount;
+        List<CapturedLine> returned = captured.Take(Math.Max(1, possibleCount)).ToList();
         long? totalLines = reachedEnd ? linesSeen : null;
-        string stopReason = hasMore ? "line_count" : "end_of_file";
+        string stopReason = truncatedByByteBudget ? "byte_budget" : hasMore ? "line_count" : "end_of_file";
 
         ReadFileOutput output = CreateOutput(
             request.Path,
@@ -103,12 +128,44 @@ internal sealed class ReadFileService(IFileSystemPlatform fileSystem)
             hasMore,
             stopReason);
 
-        bool truncatedByByteBudget = false;
-        while (returned.Count > 1 && !Fits(output))
+        if (returned.Count > 1 && !Fits(output, cancellationToken))
         {
-            returned.RemoveAt(returned.Count - 1);
             truncatedByByteBudget = true;
-            output = CreateOutput(
+            // With the paging envelope fixed, each additional line only increases
+            // the canonical size. Find the longest fitting prefix without
+            // repeatedly rebuilding and serializing almost the entire request.
+            int low = 1;
+            int high = returned.Count - 1;
+            int bestCount = 0;
+            ReadFileOutput? best = null;
+            while (low <= high)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int middle = low + ((high - low) / 2);
+                ReadFileOutput candidate = CreateOutput(
+                    request.Path,
+                    detected.Name,
+                    returned.GetRange(0, middle),
+                    totalLines,
+                    hasMore: true,
+                    stopReason: "byte_budget");
+                if (Fits(candidate, cancellationToken))
+                {
+                    bestCount = middle;
+                    best = candidate;
+                    low = middle + 1;
+                }
+                else
+                {
+                    high = middle - 1;
+                }
+            }
+
+            // Keep one line for the existing excerpt-clipping fallback when no
+            // complete line fits, so continuation never skips an unread line.
+            int retainedCount = Math.Max(1, bestCount);
+            returned.RemoveRange(retainedCount, returned.Count - retainedCount);
+            output = best ?? CreateOutput(
                 request.Path,
                 detected.Name,
                 returned,
@@ -117,7 +174,7 @@ internal sealed class ReadFileService(IFileSystemPlatform fileSystem)
                 stopReason: "byte_budget");
         }
 
-        if (returned.Count == 1 && !Fits(output))
+        if (returned.Count == 1 && !Fits(output, cancellationToken))
         {
             CapturedLine original = returned[0];
             int originalVisibleBytes = Encoding.UTF8.GetByteCount(original.Text);
@@ -130,6 +187,7 @@ internal sealed class ReadFileService(IFileSystemPlatform fileSystem)
 
             while (low <= high)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 int middle = low + ((high - low) / 2);
                 string clipped = Utf8Budget.Truncate(original.Text, middle, out _);
                 CapturedLine candidateLine = original with { Text = clipped };
@@ -141,7 +199,7 @@ internal sealed class ReadFileService(IFileSystemPlatform fileSystem)
                     candidateHasMore,
                     candidateStopReason);
 
-                if (Fits(candidate))
+                if (Fits(candidate, cancellationToken))
                 {
                     best = candidate;
                     bestLine = candidateLine;
@@ -166,7 +224,7 @@ internal sealed class ReadFileService(IFileSystemPlatform fileSystem)
             output = best;
         }
 
-        if (returned.Count == 0 || !Fits(output))
+        if (returned.Count == 0 || !Fits(output, cancellationToken))
         {
             throw new ToolExecutionException(
                 ToolErrorCodes.OutputRecordTooLarge,
@@ -175,18 +233,8 @@ internal sealed class ReadFileService(IFileSystemPlatform fileSystem)
                 limit: ToolBudgets.CanonicalResultBytes);
         }
 
-        if (truncatedByByteBudget)
-        {
-            output = CreateOutput(
-                request.Path,
-                detected.Name,
-                returned,
-                totalLines,
-                hasMore: true,
-                stopReason: "byte_budget");
-        }
-
-        EnsureOutputFits(output);
+        EnsureOutputFits(output, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         return output;
     }
 
@@ -250,20 +298,27 @@ internal sealed class ReadFileService(IFileSystemPlatform fileSystem)
         }
     }
 
-    private static bool Fits(ReadFileOutput output) =>
-        ToolResultFactory.GetCanonicalByteCount(output, ToolJsonContext.Default.ReadFileOutput) <=
-        ToolBudgets.CanonicalResultBytes;
-
-    private static void EnsureOutputFits(ReadFileOutput output)
+    private static bool Fits(ReadFileOutput output, CancellationToken cancellationToken)
     {
-        if (!Fits(output))
+        cancellationToken.ThrowIfCancellationRequested();
+        int byteCount = ToolResultFactory.GetCanonicalByteCount(output, ToolJsonContext.Default.ReadFileOutput);
+        cancellationToken.ThrowIfCancellationRequested();
+        return byteCount <= ToolBudgets.CanonicalResultBytes;
+    }
+
+    private static void EnsureOutputFits(ReadFileOutput output, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        int byteCount = ToolResultFactory.GetCanonicalByteCount(output, ToolJsonContext.Default.ReadFileOutput);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (byteCount > ToolBudgets.CanonicalResultBytes)
         {
             throw new ToolExecutionException(
                 ToolErrorCodes.OutputRecordTooLarge,
                 "The read result cannot fit within the canonical result budget.",
                 path: output.Path,
                 limit: ToolBudgets.CanonicalResultBytes,
-                actual: ToolResultFactory.GetCanonicalByteCount(output, ToolJsonContext.Default.ReadFileOutput));
+                actual: byteCount);
         }
     }
 

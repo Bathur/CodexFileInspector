@@ -20,7 +20,13 @@ internal sealed record RipgrepRunResult(
     bool StoppedEarly,
     bool OversizedRecord,
     string StandardError,
-    bool StandardErrorTruncated);
+    bool StandardErrorTruncated,
+    bool CompletedBeforeReading = false)
+{
+    // Stopping buffered output consumption does not invalidate an exit code
+    // that was already final before the runner received the process.
+    public bool ShouldValidateExitCode => !StoppedEarly || CompletedBeforeReading;
+}
 
 internal interface IRipgrepRunner
 {
@@ -49,6 +55,7 @@ internal sealed class RipgrepRunner(IProcessPlatform processPlatform) : IRipgrep
             request.WorkingDirectory);
 
         await using IRunningProcess process = processPlatform.Start(startRequest);
+        int? completedExitCode = process.CompletedExitCode;
         Task<BoundedStandardError> standardErrorTask = ReadStandardErrorAsync(
             process.StandardError.BaseStream,
             cancellationToken);
@@ -124,12 +131,13 @@ internal sealed class RipgrepRunner(IProcessPlatform processPlatform) : IRipgrep
                 ArrayPool<byte>.Shared.Return(readBuffer);
             }
 
-            if (stoppedEarly)
+            if (stoppedEarly && completedExitCode is null)
             {
                 await process.TerminateAsync(CancellationToken.None).ConfigureAwait(false);
             }
 
-            int exitCode = await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            int exitCode = completedExitCode ??
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
             BoundedStandardError standardError = await standardErrorTask.ConfigureAwait(false);
             return new RipgrepRunResult(
                 exitCode,
@@ -137,17 +145,24 @@ internal sealed class RipgrepRunner(IProcessPlatform processPlatform) : IRipgrep
                 stoppedEarly,
                 oversizedRecord,
                 standardError.Text,
-                standardError.Truncated);
+                standardError.Truncated,
+                CompletedBeforeReading: completedExitCode is not null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            await TryTerminateAsync(process).ConfigureAwait(false);
+            if (completedExitCode is null)
+            {
+                await TryTerminateAsync(process).ConfigureAwait(false);
+            }
             await IgnoreStandardErrorFailureAsync(standardErrorTask).ConfigureAwait(false);
             throw;
         }
         catch
         {
-            await TryTerminateAsync(process).ConfigureAwait(false);
+            if (completedExitCode is null)
+            {
+                await TryTerminateAsync(process).ConfigureAwait(false);
+            }
             await IgnoreStandardErrorFailureAsync(standardErrorTask).ConfigureAwait(false);
             throw;
         }

@@ -1,8 +1,10 @@
 # Codex File Inspector
 
-A small Windows-native, read-only MCP server that gives Codex direct tools for reading, searching, and discovering files. It replaces routine model-written Shell commands with fixed inputs, bounded results, and explicit continuation.
+A small Windows-native, read-only MCP server that gives Codex direct tools for reading, searching, and discovering files. It provides fixed inputs, bounded results, and explicit continuation for routine file inspection.
 
 This is a personal tool built to address a practical need in my Windows Codex workflow. I'm sharing it in case others find it useful, and I'd be happy to switch to first-party tools that cover the same needs. This is an independent project, not an official OpenAI product.
+
+Version 0.2.8 improves startup isolation, bounded-read performance and cancellation, CRLF matching, input validation, pagination and context limits, and search error reporting. It retains buffered output and the real exit code when ripgrep finishes before Job assignment, and attempts every cleanup step after a startup failure without masking the original error. Recovery messages also explain certain long-working-directory failures and known regex limitations. The four-tool API and fixed result budgets are unchanged; the server does not automatically change search roots, working directories, or filters.
 
 ## Background
 
@@ -71,15 +73,32 @@ output_token_limit = 40000
 
 `omit_tools_from` belongs to the server table, before the per-tool tables. It makes File Inspector direct-only without disabling `functions.exec` for other tools. Do not set a blanket `code_mode_host = false` as a substitute. No MCP `cwd` setting is needed for path semantics. `required=true` deliberately fails startup if this server cannot initialize.
 
-4. Add this consumer policy to your active user-level `AGENTS.md` (or `AGENTS.override.md` if you use that override), preserving unrelated instructions:
+4. Choose exactly one of the two templates below for your active user-level `AGENTS.md` (or `AGENTS.override.md` if you use that override). Replace any existing `## Filesystem inspection` section rather than appending another one. Do not combine the two templates or replace unrelated instructions.
+
+**MCP-first**
+
+Use this policy when routine inspection should default to File Inspector, with Shell available when the MCP tools cannot reasonably meet the task's requirements.
 
 ```md
 ## Filesystem inspection
 
-- For normal filesystem discovery, directory listing, text search, and bounded text reads, use the `codex_file_inspector` MCP tools instead of Shell commands. For these tasks, this instruction takes precedence over the generic preference for `rg` or `rg --files`.
-- Shell remains permitted for Git, build, test, process, and other non-inspection work; exact metadata-only requests; a one-shot tail of an unknown-length file; and an arbitrary later segment of an already truncated logical line.
-- If the MCP Server is unavailable or fails abnormally, explain the reason before falling back to Shell for filesystem inspection.
+- For routine file discovery, directory listing, text search, and bounded text reading, use the `codex_file_inspector` MCP tools by default. This takes precedence over generic Shell or `rg`/`rg --files` preferences.
+- If the MCP tools cannot reasonably meet the task's requirements using their supported options and continuation, use Shell as needed. A failed MCP attempt is not required when the limitation is already clear.
+- When switching to Shell, briefly explain the specific reason. Keep the inspection read-only, scoped to the task, and bounded in output, while preserving the required matching and filtering semantics.
 ```
+
+**Autonomous choice**
+
+Use this policy when the model should choose between File Inspector and Shell for each task, without a required order or a requirement to explain choosing Shell.
+
+```md
+## Filesystem inspection
+
+- `codex_file_inspector` provides read-only file discovery, directory listing, text search, and bounded text reading, with structured results and explicit continuation.
+- Choose between these MCP tools and Shell according to the task's requirements, reliability, and effort. Neither needs to be tried first.
+```
+
+These templates set the consumer's tool-selection policy only. The MCP Server instructions still describe how to call its tools, including direct exposure, absolute paths, continuation, truncation recovery, and read-only semantics. The user applies the selected template; changing it does not change the installed Server.
 
 5. Restart Codex. Confirm all four File Inspector tools appear in the model's direct tool list and can inspect a known non-sensitive file. An MCP connection alone does not prove direct exposure. If they are missing, check the effective configuration and higher-priority project overrides; do not work around this by writing JavaScript wrappers.
 
@@ -111,6 +130,8 @@ Logs contain original bound paths, queries, filters, error/warning information, 
 - No file editing, command-execution tool, media decoding, semantic indexing, or language-server integration is provided. Build/test/Git commands remain separate tools.
 - Results have fixed budgets and can be partial or truncated. Totals are exact when present; absent totals mean unknown. Offset pagination is not a snapshot across filesystem changes.
 
+Known limitations remain in repository-parent ignore isolation, grep's handling of bare-CR line separators, and long search working directories. The recovery messages do not remove these limits. See [known limitations](DESIGN.md#known-limitations) for their effects and targeted workarounds.
+
 ## Development and verification
 
 Requires PowerShell 7 and .NET SDK 10.0.400 (or a patch allowed by `global.json`). From a source checkout or the matching source archive:
@@ -123,7 +144,9 @@ pwsh -NoProfile -File .\build.ps1 -Target Publish -Configuration Release
 
 The acquisition script verifies the official archive against the pinned SHA-256. Build scripts keep homes, caches, temporary data, and artifacts inside the checkout; they do not change permanent environment variables or global configuration. The locked dependency graph is restored from NuGet. Publication checks exercise both supported MCP protocol eras and compare the executable's actual descriptions, schemas, and annotations with the intended contract.
 
-Local 0.2.5 verification passed 201/201 Release tests and 8/8 published-executable STDIO tests. Coverage includes real ripgrep filtering, pagination/context, output budgets, error handling, cancellation, diagnostic capture/limits/failure isolation, and both supported protocol eras. These are local verification results, not a claim of complete coverage or broad cross-machine certification. Published binaries are unsigned.
+A local 0.2.8 build passed 388/388 Release tests and 19/19 published-executable STDIO tests. Coverage includes startup isolation, filtering and CRLF matching, pagination/context, output budgets and read allocations, error handling, cancellation, diagnostics, completed-process output, exit status during pagination, failed-start cleanup, and both supported protocol eras. An installed 0.2.8 also passed 24/24 direct-tool assertions in Codex: 17 successful results and seven expected errors. Host cancellation during a running call was not exercised in that smoke check.
+
+These results describe the locally verified build; separately rebuilt or relocated release archives require their own verification. They are not a claim of complete coverage or broad cross-machine certification. Published binaries are unsigned.
 
 ## AI development and maintenance
 

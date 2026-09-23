@@ -45,21 +45,19 @@ internal sealed class GrepService(
                 null);
         }
 
-        if (!run.StoppedEarly && run.ExitCode == 2)
+        ToolExecutionException? queryFailure = RipgrepFailureClassifier.QueryFailure(
+            run,
+            searchesContents: true,
+            request.IncludeGlobs ?? [],
+            request.ExcludeGlobs ?? []);
+        if (queryFailure is not null)
         {
-            if (RipgrepFailureClassifier.IsInvalidRegex(run.StandardError))
-            {
-                throw RipgrepFailureClassifier.InvalidRegex();
-            }
+            throw queryFailure;
+        }
 
-            if (RipgrepFailureClassifier.IsInvalidGlob(run.StandardError))
-            {
-                throw RipgrepFailureClassifier.InvalidGlob(
-                    run.StandardError,
-                    request.IncludeGlobs ?? [],
-                    request.ExcludeGlobs ?? []);
-            }
-
+        bool traversalFailure = RipgrepFailureClassifier.HasTraversalFailure(run.StandardError);
+        if (traversalFailure)
+        {
             if (!pathIsDirectory)
             {
                 throw new ToolExecutionException(
@@ -74,7 +72,8 @@ internal sealed class GrepService(
                 warnings,
                 run.StandardErrorTruncated);
         }
-        else if (!run.StoppedEarly && run.ExitCode is not 0 and not 1)
+        if (run.ShouldValidateExitCode && run.ExitCode is not 0 and not 1 &&
+            !(run.ExitCode == 2 && traversalFailure))
         {
             throw new ToolExecutionException(
                 ToolErrorCodes.RipgrepFailed,
@@ -130,37 +129,39 @@ internal sealed class GrepService(
             incomplete);
 
         int removalIndex = 0;
-        while (!Fits(output) && removalIndex < removalOrder.Count)
+        while (!Fits(output))
         {
-            int currentBytes = ToolResultFactory.GetCanonicalByteCount(output, ToolJsonContext.Default.GrepOutput);
-            int remaining = removalOrder.Count - removalIndex;
-            int batch = currentBytes > ToolBudgets.CanonicalResultBytes * 4
-                ? Math.Max(1, remaining / 2)
-                : currentBytes > ToolBudgets.CanonicalResultBytes * 2
-                    ? Math.Max(1, remaining / 4)
-                    : 1;
-            for (int index = 0; index < batch && removalIndex < removalOrder.Count; index++)
+            if (removalIndex < removalOrder.Count)
             {
-                removedContext.Add(removalOrder[removalIndex++]);
+                int currentBytes = ToolResultFactory.GetCanonicalByteCount(output, ToolJsonContext.Default.GrepOutput);
+                int remaining = removalOrder.Count - removalIndex;
+                int batch = currentBytes > ToolBudgets.CanonicalResultBytes * 4
+                    ? Math.Max(1, remaining / 2)
+                    : currentBytes > ToolBudgets.CanonicalResultBytes * 2
+                        ? Math.Max(1, remaining / 4)
+                        : 1;
+                for (int index = 0; index < batch && removalIndex < removalOrder.Count; index++)
+                {
+                    removedContext.Add(removalOrder[removalIndex++]);
+                }
+            }
+            else if (selected.Count > 1)
+            {
+                selected.RemoveAt(selected.Count - 1);
+                hasMore = true;
+                truncatedBy = "byte_budget";
+                removalOrder = request.ContextLines == 0
+                    ? []
+                    : GrepBlockBuilder.ContextRemovalOrder(selected, accumulator.Lines)
+                        .Where(key => !removedContext.Contains(key))
+                        .ToArray();
+                removalIndex = 0;
+            }
+            else
+            {
+                break;
             }
 
-            output = CreateMatchesOutput(
-                request,
-                selected,
-                accumulator.Lines,
-                removedContext,
-                totalResults,
-                hasMore,
-                truncatedBy,
-                warnings,
-                incomplete);
-        }
-
-        while (!Fits(output) && selected.Count > 1)
-        {
-            selected.RemoveAt(selected.Count - 1);
-            hasMore = true;
-            truncatedBy = "byte_budget";
             output = CreateMatchesOutput(
                 request,
                 selected,
@@ -212,7 +213,7 @@ internal sealed class GrepService(
             truncatedBy,
             warnings,
             incomplete);
-        while (paths.Count > 0 && !Fits(output))
+        while (paths.Count > (incomplete ? 0 : 1) && !Fits(output))
         {
             paths.RemoveAt(paths.Count - 1);
             hasMore = true;
@@ -258,7 +259,7 @@ internal sealed class GrepService(
             truncatedBy,
             warnings,
             incomplete);
-        while (counts.Count > 0 && !Fits(output))
+        while (counts.Count > (incomplete ? 0 : 1) && !Fits(output))
         {
             counts.RemoveAt(counts.Count - 1);
             hasMore = true;

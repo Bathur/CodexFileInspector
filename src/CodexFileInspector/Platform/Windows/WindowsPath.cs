@@ -18,10 +18,8 @@ internal static class WindowsPath
             throw new PathValidationException(ToolErrorCodes.PathNotAbsolute, "Path must be a fully qualified Windows absolute path.");
         }
 
-        if (DevicePrefixes.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new PathValidationException(ToolErrorCodes.InvalidPath, "Caller-supplied device and extended namespace paths are not supported.");
-        }
+        path = path.Replace('/', '\\');
+        RejectDeviceNamespace(path);
 
         if (!Path.IsPathFullyQualified(path))
         {
@@ -33,13 +31,25 @@ internal static class WindowsPath
             throw new PathValidationException(ToolErrorCodes.InvalidPath, "Path contains characters that are not valid in a concrete Windows path.");
         }
 
+        string normalized;
         try
         {
-            return Path.GetFullPath(path);
+            normalized = Path.GetFullPath(path);
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
         {
             throw new PathValidationException(ToolErrorCodes.InvalidPath, "Path is not a valid fully qualified Windows path.");
+        }
+
+        RejectDeviceNamespace(normalized);
+        return normalized;
+    }
+
+    private static void RejectDeviceNamespace(string path)
+    {
+        if (DevicePrefixes.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new PathValidationException(ToolErrorCodes.InvalidPath, "Caller-supplied device and extended namespace paths are not supported.");
         }
     }
 }

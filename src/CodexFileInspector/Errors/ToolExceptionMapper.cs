@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using CodexFileInspector.Contracts;
+using CodexFileInspector.Platform;
 using CodexFileInspector.Platform.Windows;
 
 namespace CodexFileInspector.Errors;
@@ -37,11 +38,15 @@ internal static class ToolExceptionMapper
 {
     private const int ErrorSharingViolation = 32;
     private const int ErrorLockViolation = 33;
+    private const int ErrorInvalidName = 123;
+    // A recovery-hint threshold, not an OS path limit or preflight rejection.
+    private const int LongWorkingDirectoryHintThreshold = 250;
 
     public static bool IsExpected(Exception exception) => exception is
         ToolExecutionException or
         ToolValidationException or
         PathValidationException or
+        ProcessStartFailureException or
         FileNotFoundException or
         DirectoryNotFoundException or
         UnauthorizedAccessException or
@@ -51,6 +56,12 @@ internal static class ToolExceptionMapper
     public static ToolError Map(Exception exception, string? path)
     {
         ArgumentNullException.ThrowIfNull(exception);
+
+        ProcessStartFailureException? startFailure = exception as ProcessStartFailureException;
+        if (startFailure is not null)
+        {
+            exception = startFailure.NativeFailure;
+        }
 
         string code;
         string message;
@@ -101,6 +112,14 @@ internal static class ToolExceptionMapper
                 message = "The operating system denied access to the named path.";
                 break;
 
+            case Win32Exception { NativeErrorCode: ErrorInvalidName }:
+            case IOException invalidName when (invalidName.HResult == unchecked((int)0x8007007B)):
+                code = ToolErrorCodes.InvalidPath;
+                message = "The named path is not a valid Windows path.";
+                field = "path";
+                osCode = ErrorInvalidName;
+                break;
+
             case Win32Exception win32:
                 osCode = win32.NativeErrorCode;
                 code = IsSharingViolation(osCode.Value) ? ToolErrorCodes.SharingViolation : ToolErrorCodes.IoError;
@@ -132,6 +151,17 @@ internal static class ToolExceptionMapper
             path = null;
         }
 
+        bool retryable = definition.Retryable;
+        if (code is ToolErrorCodes.IoError &&
+            startFailure is not null &&
+            startFailure.WorkingDirectory.Length >= LongWorkingDirectoryHintThreshold)
+        {
+            retryable = false;
+            message = $"The search process could not start. Its working directory is long ({startFailure.WorkingDirectory.Length} UTF-16 code units), which may trigger Windows process-start limits. " +
+                "Do not repeat this request unchanged. Use a shorter existing ancestor as the search root and rebase include_globs/exclude_globs to retain the intended scope; review ignore and hidden filtering. " +
+                "Use read_file for a known file or list_directory for direct directory inspection.";
+        }
+
         message = Utf8Budget.Truncate(message, ToolBudgets.ErrorMessageBytes, out _);
         if (path is not null)
         {
@@ -145,7 +175,7 @@ internal static class ToolExceptionMapper
             }
         }
 
-        return new ToolError(code, message, definition.Retryable, field, index, path, limit, actual, total, osCode);
+        return new ToolError(code, message, retryable, field, index, path, limit, actual, total, osCode);
     }
 
     private static bool IsSharingViolation(int errorCode) =>

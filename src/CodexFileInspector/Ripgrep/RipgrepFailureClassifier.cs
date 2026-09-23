@@ -5,29 +5,69 @@ namespace CodexFileInspector.Ripgrep;
 
 internal static class RipgrepFailureClassifier
 {
-    public static ToolExecutionException InvalidGlob(
-        string standardError,
+    private const string GlobErrorPrefix = "error parsing glob '";
+    private const string GenericRegexFailureMessage =
+        "pattern cannot be compiled by bundled ripgrep 15.2.0 for this search.";
+
+    public static ToolExecutionException? QueryFailure(
+        RipgrepRunResult run,
+        bool searchesContents,
         IReadOnlyList<string> includeGlobs,
         IReadOnlyList<string> excludeGlobs)
     {
-        (string Field, int Index) location = FindGlobLocation(standardError, includeGlobs, excludeGlobs);
-        return new ToolExecutionException(
-            ToolErrorCodes.InvalidPattern,
-            "A glob pattern is invalid for bundled ripgrep 15.2.0.",
-            field: location.Field,
-            index: location.Index);
+        // Query construction precedes every stdout record. A killed search's
+        // exit code and diagnostic paths must never be mistaken for this phase.
+        if (!run.ShouldValidateExitCode || run.ExitCode != 2 || run.RecordsRead != 0)
+        {
+            return null;
+        }
+
+        using StringReader reader = new(run.StandardError);
+        while (reader.ReadLine() is string line)
+        {
+            string diagnostic = RemoveProgramPrefix(line);
+            if (diagnostic.StartsWith(GlobErrorPrefix, StringComparison.Ordinal))
+            {
+                (string? Field, int? Index) location = run.StandardErrorTruncated
+                    ? (null, null)
+                    : FindGlobLocation(diagnostic, includeGlobs, excludeGlobs);
+                return new ToolExecutionException(
+                    ToolErrorCodes.InvalidPattern,
+                    "A glob pattern is invalid for bundled ripgrep 15.2.0.",
+                    field: location.Field,
+                    index: location.Index);
+            }
+
+            if (searchesContents && IsRegexCompilationFailure(diagnostic))
+            {
+                return new ToolExecutionException(
+                    ToolErrorCodes.InvalidPattern,
+                    RegexFailureMessage(diagnostic, reader),
+                    field: "pattern");
+            }
+        }
+
+        return null;
     }
 
-    public static ToolExecutionException InvalidRegex() => new(
-        ToolErrorCodes.InvalidPattern,
-        "pattern is not a valid bundled ripgrep 15.2.0 regular expression.",
-        field: "pattern");
+    public static bool HasTraversalFailure(string standardError)
+    {
+        using StringReader reader = new(standardError);
+        while (reader.ReadLine() is string line)
+        {
+            string diagnostic = RemoveProgramPrefix(line);
+            int separator = diagnostic.IndexOf(": ", StringComparison.Ordinal);
+            if (separator > 0 && separator + 2 < diagnostic.Length &&
+                Path.IsPathFullyQualified(diagnostic[..separator]))
+            {
+                // Explicit absolute search roots make pinned ripgrep's path
+                // diagnostics absolute too. The OS message may be localized.
+                return true;
+            }
+        }
 
-    public static bool IsInvalidGlob(string standardError) =>
-        standardError.Contains("error parsing glob", StringComparison.OrdinalIgnoreCase);
-
-    public static bool IsInvalidRegex(string standardError) =>
-        standardError.Contains("regex parse error", StringComparison.OrdinalIgnoreCase);
+        return false;
+    }
 
     public static void AddTraversalWarning(WarningCollector warnings, bool stderrTruncated)
     {
@@ -37,14 +77,67 @@ internal static class RipgrepFailureClassifier
         warnings.Add(ToolWarningCodes.RipgrepTraversal, message, null);
     }
 
-    private static (string Field, int Index) FindGlobLocation(
-        string standardError,
+    private static bool IsRegexCompilationFailure(string diagnostic) =>
+        diagnostic.StartsWith("regex parse error:", StringComparison.Ordinal) ||
+        diagnostic.StartsWith("compiled regex exceeds size limit of ", StringComparison.Ordinal) ||
+        (diagnostic.StartsWith("the literal \"", StringComparison.Ordinal) &&
+         diagnostic.EndsWith("\" is not allowed in a regex", StringComparison.Ordinal)) ||
+        (diagnostic.StartsWith("pattern contains \"", StringComparison.Ordinal) &&
+         diagnostic.EndsWith("\" but it is impossible to match", StringComparison.Ordinal));
+
+    private static string RegexFailureMessage(string diagnostic, StringReader reader)
+    {
+        if (!StringComparer.Ordinal.Equals(diagnostic, "regex parse error:"))
+        {
+            return GenericRegexFailureMessage;
+        }
+
+        // Pinned ripgrep renders indented pattern/caret lines, then one reason.
+        // Stop at that reason or the block boundary; do not inspect the pattern
+        // itself or forward ripgrep's subsequent --pcre2 suggestion.
+        while (reader.ReadLine() is string line)
+        {
+            if (line.StartsWith("error:", StringComparison.Ordinal))
+            {
+                return line switch
+                {
+                    "error: look-around, including look-ahead and look-behind, is not supported" =>
+                        "This grep tool does not support lookaround (lookahead or lookbehind); PCRE2 is not supported. Rewrite the pattern using supported regex syntax.",
+                    "error: backreferences are not supported" =>
+                        "This grep tool does not support backreferences; PCRE2 is not supported. Rewrite the pattern using supported regex syntax.",
+                    _ => GenericRegexFailureMessage,
+                };
+            }
+
+            if (string.IsNullOrWhiteSpace(line) || !char.IsWhiteSpace(line[0]))
+            {
+                break;
+            }
+        }
+
+        return GenericRegexFailureMessage;
+    }
+
+    private static string RemoveProgramPrefix(string line) =>
+        line.StartsWith("rg: ", StringComparison.Ordinal) ? line[4..] : line;
+
+    private static (string? Field, int? Index) FindGlobLocation(
+        string diagnostic,
         IReadOnlyList<string> includeGlobs,
         IReadOnlyList<string> excludeGlobs)
     {
+        // The glob is quoted without escaping embedded apostrophes. The final
+        // quote/colon boundary precedes the fixed globset explanation.
+        int end = diagnostic.LastIndexOf("': ", StringComparison.Ordinal);
+        if (end < GlobErrorPrefix.Length)
+        {
+            return (null, null);
+        }
+
+        string failedGlob = diagnostic[GlobErrorPrefix.Length..end];
         for (int index = 0; index < includeGlobs.Count; index++)
         {
-            if (standardError.Contains(includeGlobs[index], StringComparison.Ordinal))
+            if (StringComparer.Ordinal.Equals(failedGlob, includeGlobs[index]))
             {
                 return ("include_globs", index);
             }
@@ -52,14 +145,12 @@ internal static class RipgrepFailureClassifier
 
         for (int index = 0; index < excludeGlobs.Count; index++)
         {
-            if (standardError.Contains(excludeGlobs[index], StringComparison.Ordinal))
+            if (StringComparer.Ordinal.Equals(failedGlob, $"!{excludeGlobs[index]}"))
             {
                 return ("exclude_globs", index);
             }
         }
 
-        return includeGlobs.Count > 0
-            ? ("include_globs", 0)
-            : ("exclude_globs", 0);
+        return (null, null);
     }
 }

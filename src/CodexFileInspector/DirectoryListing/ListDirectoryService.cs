@@ -144,7 +144,7 @@ internal sealed class ListDirectoryService(
             hasMore,
             truncatedBy);
 
-        while (page.Count > 0 && !Fits(output))
+        while (page.Count > 1 && !Fits(output))
         {
             page.RemoveAt(page.Count - 1);
             hasMore = true;

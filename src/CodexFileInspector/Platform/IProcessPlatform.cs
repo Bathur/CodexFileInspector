@@ -10,6 +10,10 @@ internal interface IRunningProcess : IAsyncDisposable
 {
     int Id { get; }
 
+    // An immutable terminal-code snapshot when startup accepted a process
+    // that had already exited; null for the ordinary running-process path.
+    int? CompletedExitCode { get; }
+
     StreamReader StandardOutput { get; }
 
     StreamReader StandardError { get; }

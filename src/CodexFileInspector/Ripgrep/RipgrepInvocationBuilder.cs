@@ -43,6 +43,7 @@ internal sealed class RipgrepInvocationBuilder(IFileSystemPlatform fileSystem)
             request.RespectIgnoreFiles,
             context);
         arguments.Add("--json");
+        arguments.Add("--crlf");
         arguments.Add("--glob-case-insensitive");
         if (request.PatternKind is PatternKind.Literal)
         {
@@ -158,19 +159,52 @@ internal sealed class RipgrepInvocationBuilder(IFileSystemPlatform fileSystem)
 
     private static void EnsureCommandLineFits(IReadOnlyList<string> arguments)
     {
-        long conservativeCharacters = BundledRipgrep.ExecutablePath.Length + 1L;
+        // Process quotes argv[0]. Include those quotes, separators, and the
+        // terminating NUL in addition to ArgumentList's Windows escaping.
+        long characters = BundledRipgrep.ExecutablePath.Length + 3L;
         foreach (string argument in arguments)
         {
-            conservativeCharacters += argument.Length + 3L;
+            characters += 1L + EscapedArgumentLength(argument);
         }
 
-        if (conservativeCharacters > ToolBudgets.RipgrepCommandLineCharacters)
+        if (characters > ToolBudgets.RipgrepCommandLineCharacters)
         {
             throw new ToolExecutionException(
                 ToolErrorCodes.InvalidArgument,
                 "The combined pattern, glob, path, and fixed ripgrep arguments exceed the Windows process argument limit.",
                 limit: ToolBudgets.RipgrepCommandLineCharacters,
-                actual: conservativeCharacters);
+                actual: characters);
         }
+    }
+
+    private static long EscapedArgumentLength(string argument)
+    {
+        if (argument.Length > 0 && !argument.Any(static character => char.IsWhiteSpace(character) || character == '"'))
+        {
+            return argument.Length;
+        }
+
+        long length = argument.Length + 2L;
+        int backslashes = 0;
+        foreach (char character in argument)
+        {
+            if (character == '\\')
+            {
+                backslashes++;
+                continue;
+            }
+
+            if (character == '"')
+            {
+                // Backslashes preceding a quote are doubled, and the quote
+                // itself needs one additional escape character.
+                length += backslashes + 1L;
+            }
+
+            backslashes = 0;
+        }
+
+        // A final run is doubled before the closing quote.
+        return length + backslashes;
     }
 }

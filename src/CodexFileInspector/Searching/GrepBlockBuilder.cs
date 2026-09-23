@@ -12,9 +12,8 @@ internal static class GrepBlockBuilder
         IReadOnlySet<GrepLineKey> removedContext)
     {
         List<GrepMatchBlock> blocks = [];
+        // GroupBy preserves the selected ripgrep file order used by offsets and budget trimming.
         foreach (IGrouping<string, GrepSelectedMatch> fileGroup in selectedMatches
-                     .OrderBy(static match => match.Path, StablePathComparer.Instance)
-                     .ThenBy(static match => match.LineNumber)
                      .GroupBy(static match => match.Path, StringComparer.Ordinal))
         {
             GrepSelectedMatch[] fileMatches = fileGroup.OrderBy(static match => match.LineNumber).ToArray();
@@ -22,7 +21,7 @@ internal static class GrepBlockBuilder
             List<LineInterval> intervals = MergeIntervals(fileMatches, contextLines);
             GrepLineData[] fileLines = availableLines
                 .Where(pair => StringComparer.Ordinal.Equals(pair.Key.Path, fileGroup.Key))
-                .Where(pair => pair.Value.IsSelectedMatch || !removedContext.Contains(pair.Key))
+                .Where(pair => matchByLine.ContainsKey(pair.Key.LineNumber) || !removedContext.Contains(pair.Key))
                 .Select(static pair => pair.Value)
                 .OrderBy(static line => line.LineNumber)
                 .ToArray();
@@ -84,8 +83,8 @@ internal static class GrepBlockBuilder
                 StringComparer.Ordinal);
 
         return availableLines
-            .Where(static pair => !pair.Value.IsSelectedMatch)
-            .Where(pair => selectedByPath.ContainsKey(pair.Key.Path))
+            .Where(pair => selectedByPath.TryGetValue(pair.Key.Path, out long[]? selectedLines) &&
+                           selectedLines.BinarySearch(pair.Key.LineNumber) < 0)
             .Select(pair => new
             {
                 pair.Key,

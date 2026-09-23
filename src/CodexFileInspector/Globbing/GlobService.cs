@@ -110,22 +110,26 @@ internal sealed class GlobService(
                 null);
         }
 
-        if (!run.StoppedEarly && run.ExitCode == 2 && RipgrepFailureClassifier.IsInvalidGlob(run.StandardError))
+        ToolExecutionException? queryFailure = RipgrepFailureClassifier.QueryFailure(
+            run,
+            searchesContents: false,
+            request.IncludeGlobs,
+            request.ExcludeGlobs ?? []);
+        if (queryFailure is not null)
         {
-            throw RipgrepFailureClassifier.InvalidGlob(
-                run.StandardError,
-                request.IncludeGlobs,
-                request.ExcludeGlobs ?? []);
+            throw queryFailure;
         }
 
-        if (!run.StoppedEarly && run.ExitCode == 2)
+        bool traversalFailure = RipgrepFailureClassifier.HasTraversalFailure(run.StandardError);
+        if (traversalFailure)
         {
             incomplete = true;
             RipgrepFailureClassifier.AddTraversalWarning(
                 warnings,
                 run.StandardErrorTruncated);
         }
-        else if (!run.StoppedEarly && run.ExitCode is not 0 and not 1)
+        if (run.ShouldValidateExitCode && run.ExitCode is not 0 and not 1 &&
+            !(run.ExitCode == 2 && traversalFailure))
         {
             throw new ToolExecutionException(
                 ToolErrorCodes.RipgrepFailed,
@@ -161,7 +165,7 @@ internal sealed class GlobService(
             exactTotal,
             hasMore,
             truncatedBy);
-        while (page.Count > 0 && !Fits(output))
+        while (page.Count > 1 && !Fits(output))
         {
             page.RemoveAt(page.Count - 1);
             hasMore = true;

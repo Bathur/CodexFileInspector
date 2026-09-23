@@ -179,7 +179,7 @@ public static class FileInspectorTools
         string path,
         [MinLength(1), Description("Non-empty single-line pattern, at most 8 KiB UTF-8.")]
         string pattern,
-        [Description("How to interpret pattern: literal or regex.")]
+        [Description("How to interpret pattern: literal or regex. Regex uses ripgrep's default Rust engine; PCRE2 is not supported.")]
         PatternKind pattern_kind,
         IServiceProvider services,
         [Description("Whether matching is case-sensitive. Defaults to true; smart-case is not used.")]
