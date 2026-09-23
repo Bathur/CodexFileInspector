@@ -22,4 +22,4 @@ Follow the user's selected MCP-first or Autonomous choice policy in [README.md](
 
 - For routine file discovery, directory listing, text search, and bounded text reading, use the `codex_file_inspector` MCP tools by default. This takes precedence over generic Shell or `rg`/`rg --files` preferences.
 - If the MCP tools cannot reasonably meet the task's requirements using their supported options and continuation, use Shell as needed. A failed MCP attempt is not required when the limitation is already clear.
-- When switching to Shell, briefly explain the specific reason. Keep the inspection read-only, scoped to the task, and bounded in output, while preserving the required matching and filtering semantics.
+- When using Shell as a fallback for the inspection operations above, briefly explain the relevant MCP limitation without repeating an already stated reason. This policy does not require explanations for Shell use outside those inspection operations.
