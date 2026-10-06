@@ -12,3 +12,5 @@
 # Common operating-system metadata
 Thumbs.db
 .DS_Store
+
+.codex/

@@ -4,7 +4,7 @@ A small Windows-native, read-only MCP server that gives Codex direct tools for r
 
 This is a personal tool built to address a practical need in my Windows Codex workflow. I'm sharing it in case others find it useful, and I'd be happy to switch to first-party tools that cover the same needs. This is an independent project, not an official OpenAI product.
 
-Version 0.2.8 improves startup isolation, bounded-read performance and cancellation, CRLF matching, input validation, pagination and context limits, and search error reporting. It retains buffered output and the real exit code when ripgrep finishes before Job assignment, and attempts every cleanup step after a startup failure without masking the original error. Recovery messages also explain certain long-working-directory failures and known regex limitations. The four-tool API and fixed result budgets are unchanged; the server does not automatically change search roots, working directories, or filters.
+Version 0.3.0 adds local Streamable HTTP alongside the default STDIO transport. One executable selects the transport with a startup argument; HTTP runs manually on IPv4 loopback without authentication and supports both MCP protocol eras. The same four tools, fixed result budgets, recovery guidance, and ripgrep lifecycle handling are used in both modes.
 
 ## Background
 
@@ -36,8 +36,8 @@ These basic operations are intended to be direct calls with self-contained resul
 ## Requirements
 
 - Windows x64. Tested on Windows 11 x64; Linux, macOS, and ARM64 are not supported by this distribution.
-- The .NET 10 x64 runtime. This is a framework-dependent application, not a single-file self-contained executable.
-- Codex with STDIO MCP support and the per-server `omit_tools_from` setting used below. Host exposure can vary by version: confirm direct tools are actually present after restarting.
+- The .NET 10 and ASP.NET Core 10 x64 runtimes, in both transport modes. This is a framework-dependent application, not a single-file self-contained executable. `dotnet --list-runtimes` should include both `Microsoft.NETCore.App 10.x` and `Microsoft.AspNetCore.App 10.x`.
+- Codex with STDIO or Streamable HTTP MCP support and the per-server `omit_tools_from` setting used below. Host exposure can vary by version: confirm direct tools are actually present after restarting.
 
 Official ripgrep 15.2.0 is bundled in the binary archive. No global ripgrep installation, PATH modification, or runtime download is needed.
 
@@ -45,7 +45,7 @@ Official ripgrep 15.2.0 is bundled in the binary archive. No global ripgrep inst
 
 1. Extract the complete versioned Windows x64 binary archive to a stable directory, for example `C:\Tools\CodexFileInspector`. Keep all assemblies, `runtimes`, `tools`, licenses, and notices; do not copy only the `.exe`.
 2. Run the executable with `--version` and confirm the expected release.
-3. Merge the following into your user-level `%USERPROFILE%\.codex\config.toml`, changing only the example executable path as needed. Preserve unrelated settings and deliberate approval/output-limit customizations.
+3. Choose STDIO or HTTP. STDIO is the default: merge the following into your user-level `%USERPROFILE%\.codex\config.toml`, changing only the example executable path as needed. Preserve unrelated settings and deliberate approval/output-limit customizations.
 
 ```toml
 [mcp_servers.codex_file_inspector]
@@ -72,6 +72,30 @@ output_token_limit = 40000
 ```
 
 `omit_tools_from` belongs to the server table, before the per-tool tables. It makes File Inspector direct-only without disabling `functions.exec` for other tools. Do not set a blanket `code_mode_host = false` as a substitute. No MCP `cwd` setting is needed for path semantics. `required=true` deliberately fails startup if this server cannot initialize.
+
+For HTTP, double-click the packaged `Start-Http.bat` beside the executable and keep its console window open. It starts the neighboring executable with the default port 43127 and diagnostics disabled. After the executable exits, the script pauses so its output remains visible. From a terminal it also accepts extra arguments, for example `Start-Http.bat --port 43128 --diagnostics`. Alternatively, start the executable directly:
+
+```powershell
+& 'C:\Tools\CodexFileInspector\CodexFileInspector.exe' --transport http
+```
+
+Then replace the STDIO server table above with this HTTP table, keeping the same four per-tool subtables:
+
+```toml
+[mcp_servers.codex_file_inspector]
+url = "http://127.0.0.1:43127/mcp"
+enabled = true
+required = true
+enabled_tools = ["read_file", "grep", "glob", "list_directory"]
+default_tools_approval_mode = "writes"
+startup_timeout_sec = 10
+tool_timeout_sec = 300
+omit_tools_from = ["code_mode", "deferred"]
+```
+
+Do not keep `command` or `args` in the HTTP server table. The client connects to the existing service; it does not start or stop it. Use `Ctrl+C` in the service terminal to stop it. To select another port, start with `--transport http --port 43128` and change the configuration URL to the same port. If `required=true`, the service must already be running when Codex initializes it. To return to STDIO, restore the `command` table, remove `url`, and restart Codex; the HTTP service may then be stopped.
+
+HTTP binds only `127.0.0.1`. It has no authentication and can be called by other local MCP clients with the service process's filesystem permissions. Host and any supplied Origin must identify `127.0.0.1`, `localhost`, or `[::1]` on the listening port; clients without Origin are supported. The listener remains IPv4-only despite accepting those loopback request names. No CORS policy or access-log trail is enabled.
 
 4. Choose exactly one of the two templates below for your active user-level `AGENTS.md` (or `AGENTS.override.md` if you use that override). Replace any existing `## Filesystem inspection` section rather than appending another one. Do not combine the two templates or replace unrelated instructions.
 
@@ -108,13 +132,21 @@ Configuration background: [official MCP documentation](https://learn.chatgpt.com
 
 An agent can work around a failed tool call and finish its task without drawing attention to the failure. Optional diagnostics leave evidence for later review without asking the agent to interrupt its main task and report every problem.
 
-Starting in 0.2.5, file diagnostics are disabled by default. To enable them, add this line to the existing `[mcp_servers.codex_file_inspector]` table, next to `command` and **before the first per-tool table**:
+Starting in 0.2.5, file diagnostics are disabled by default. In STDIO mode, enable them by adding this line to the existing `[mcp_servers.codex_file_inspector]` table, next to `command` and **before the first per-tool table**:
 
 ```toml
 args = ["--diagnostics"]
 ```
 
 If `args` already exists, append `"--diagnostics"` to that array instead of adding another key. Restart Codex to apply the startup argument. To disable diagnostics, remove that argument and restart again; existing logs remain on disk.
+
+In HTTP mode, add the flag to the manually started service command instead of the URL configuration:
+
+```powershell
+& 'C:\Tools\CodexFileInspector\CodexFileInspector.exe' --transport http --diagnostics
+```
+
+Stop and restart that service to change diagnostic activation. Both modes use the same default-off sink and capture boundary.
 
 Only final tool results with `status=error` or `status=partial` are recorded. Successful calls, ordinary cancellation, and SDK/protocol/startup failures outside the standard tool-result boundary are excluded. The first eligible record creates `logs` under the application directory, independent of the Host working directory or inspected path. For the example installation, this is `C:\Tools\CodexFileInspector\logs`.
 
@@ -142,9 +174,13 @@ pwsh -NoProfile -File .\build.ps1 -Configuration Release
 pwsh -NoProfile -File .\build.ps1 -Target Publish -Configuration Release
 ```
 
-The acquisition script verifies the official archive against the pinned SHA-256. Build scripts keep homes, caches, temporary data, and artifacts inside the checkout; they do not change permanent environment variables or global configuration. The locked dependency graph is restored from NuGet. Publication checks exercise both supported MCP protocol eras and compare the executable's actual descriptions, schemas, and annotations with the intended contract.
+The acquisition script verifies the official archive against the pinned SHA-256. Build scripts keep homes, caches, temporary data, and artifacts inside the checkout; they do not change permanent environment variables or global configuration. The locked dependency graph is restored from NuGet. Publication checks exercise both transports and both supported MCP protocol eras and compare the executable's actual descriptions, schemas, and annotations with the intended contract.
 
-A local 0.2.8 build passed 388/388 Release tests and 19/19 published-executable STDIO tests. Coverage includes startup isolation, filtering and CRLF matching, pagination/context, output budgets and read allocations, error handling, cancellation, diagnostics, completed-process output, exit status during pagination, failed-start cleanup, and both supported protocol eras. An installed 0.2.8 also passed 24/24 direct-tool assertions in Codex: 17 successful results and seven expected errors. Host cancellation during a running call was not exercised in that smoke check.
+On 2026-10-05, a local 0.3.0 build passed 423/423 Release tests and 32/32 published-executable tests: 19 STDIO and 13 HTTP. Both protocol eras were tested for tool metadata and calls; HTTP checks also cover parallel clients, configuration isolation, Host/Origin validation, occupied ports, and absence of successful-request access logs. Six lifecycle cases use real bundled rg and Windows Jobs to verify explicit cancellation, service shutdown, and the different protocol disconnect rules. The legacy cancellation test sends the standard cancellation notification explicitly; it does not assume the SDK test client's token cancellation already sent it.
+
+The 2026-10-06 manual-launcher addition retained the same production assembly and passed the 32 published-executable tests again. Native cmd checks covered relocation to a directory with spaces and `!`, an unrelated working directory, extra startup arguments, a missing neighboring executable, and preserved error exit codes. The full 423-test suite was not rerun for that packaging addition.
+
+A foreground published HTTP smoke displayed its listener and Ctrl+C instructions, then reported shutdown and closed the port after Ctrl+C. It did not include an active rg request or establish a zero application exit code. User-operated Codex HTTP activation has not been performed. Historical 0.2.8 passed 24/24 installed direct-tool assertions in Codex before HTTP; that remains separate evidence.
 
 These results describe the locally verified build; separately rebuilt or relocated release archives require their own verification. They are not a claim of complete coverage or broad cross-machine certification. Published binaries are unsigned.
 

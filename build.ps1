@@ -4,10 +4,20 @@ param(
     [string] $Target = 'All',
 
     [ValidateSet('Debug', 'Release')]
-    [string] $Configuration = 'Debug'
+    [string] $Configuration = 'Debug',
+
+    [switch] $UpdateLockFile,
+
+    [string] $TestFilter
 )
 
 $ErrorActionPreference = 'Stop'
+if ($UpdateLockFile -and $Target -notin @('Restore', 'All')) {
+    throw '-UpdateLockFile is supported only for Restore or All.'
+}
+if ($TestFilter -and $Target -notin @('Test', 'All')) {
+    throw '-TestFilter is supported only for Test or All.'
+}
 if (-not $IsWindows -or [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne [Runtime.InteropServices.Architecture]::X64) {
     throw 'This build and bundled ripgrep distribution target Windows x64. Use PowerShell 7 on a supported Windows x64 host.'
 }
@@ -28,6 +38,9 @@ $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE = '1'
 $env:DOTNET_NOLOGO = '1'
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
+$env:MSBuildEnableWorkloadResolver = 'false'
+$env:APPDATA = Join-Path $repositoryRoot '.local\appdata'
+$env:LOCALAPPDATA = Join-Path $repositoryRoot '.local\localappdata'
 $env:NUGET_HTTP_CACHE_PATH = Join-Path $repositoryRoot '.local\nuget\http-cache'
 $env:NUGET_PACKAGES = Join-Path $repositoryRoot '.local\nuget\packages'
 $env:NUGET_PLUGINS_CACHE_PATH = Join-Path $repositoryRoot '.local\nuget\plugins-cache'
@@ -37,6 +50,8 @@ $env:TMP = $env:TEMP
 
 $localDirectories = @(
     $env:DOTNET_CLI_HOME,
+    $env:APPDATA,
+    $env:LOCALAPPDATA,
     $env:NUGET_HTTP_CACHE_PATH,
     $env:NUGET_PACKAGES,
     $env:NUGET_PLUGINS_CACHE_PATH,
@@ -117,6 +132,7 @@ function Test-PublishedServer {
     $ripgrepExecutable = Join-Path $publishDirectory 'tools\ripgrep\rg.exe'
     $requiredFiles = @(
         $serverExecutable,
+        (Join-Path $publishDirectory 'Start-Http.bat'),
         (Join-Path $publishDirectory 'LICENSE'),
         (Join-Path $publishDirectory 'README.md'),
         (Join-Path $publishDirectory 'SOURCE.md'),
@@ -137,6 +153,11 @@ function Test-PublishedServer {
     }
 
     Test-DistributionLicenses
+    $runtimeConfiguration = Get-Content -Raw -LiteralPath (Join-Path $publishDirectory 'CodexFileInspector.runtimeconfig.json') | ConvertFrom-Json
+    $frameworkNames = @($runtimeConfiguration.runtimeOptions.frameworks | ForEach-Object { $_.name })
+    if ('Microsoft.NETCore.App' -notin $frameworkNames -or 'Microsoft.AspNetCore.App' -notin $frameworkNames) {
+        throw 'Published runtime configuration must require both .NET and ASP.NET Core.'
+    }
     $serverVersion = & $serverExecutable '--version'
     $expectedVersionPattern = [Regex]::Escape($expectedServerVersion)
     if ($LASTEXITCODE -ne 0 -or $serverVersion -notmatch "^Codex File Inspector $expectedVersionPattern(?:\.0)?$") {
@@ -155,7 +176,8 @@ function Test-PublishedServer {
             'test', $testProjectPath,
             '--configuration', 'Release',
             '--no-restore',
-            '--filter', 'FullyQualifiedName~StdioServerTests',
+            '--filter', 'FullyQualifiedName~StdioServerTests|FullyQualifiedName~HttpServerTests',
+            '--logger', "trx;LogFileName=published-$expectedServerVersion.trx",
             '--results-directory', (Join-Path $repositoryRoot '.artifacts\test-results\published')
         )
     }
@@ -187,11 +209,15 @@ function Test-PublishedServer {
 Push-Location $repositoryRoot
 try {
     if ($Target -in @('Restore', 'All')) {
-        Invoke-DotNet @(
+        $restoreArguments = @(
             'restore', $solutionPath,
             '--configfile', (Join-Path $repositoryRoot 'NuGet.Config'),
             '--packages', $env:NUGET_PACKAGES
         )
+        if ($UpdateLockFile) {
+            $restoreArguments += @('--force-evaluate', '--property:RestoreLockedMode=false')
+        }
+        Invoke-DotNet $restoreArguments
     }
 
     if ($Target -in @('Build', 'All')) {
@@ -203,12 +229,16 @@ try {
     }
 
     if ($Target -in @('Test', 'All')) {
-        Invoke-DotNet @(
+        $testArguments = @(
             'test', $solutionPath,
             '--configuration', $Configuration,
             '--no-build',
+            '--no-restore',
+            '--logger', ('trx;LogFileName=' + $(if ($TestFilter) { "filtered-$expectedServerVersion.trx" } else { "release-$expectedServerVersion.trx" })),
             '--results-directory', (Join-Path $repositoryRoot '.artifacts\test-results')
         )
+        if ($TestFilter) { $testArguments += @('--filter', $TestFilter) }
+        Invoke-DotNet $testArguments
     }
 
     if ($Target -eq 'Publish') {

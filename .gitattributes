@@ -8,6 +8,7 @@
 *.toml text eol=lf
 *.slnx text eol=lf
 *.ps1 text eol=lf
+*.bat text eol=crlf
 *.config text eol=lf
 LICENSE text eol=lf
 third_party/dotnet/*.txt text eol=lf

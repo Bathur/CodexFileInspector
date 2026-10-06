@@ -4,11 +4,21 @@
 
 Codex File Inspector supplies four predictable read-only filesystem primitives for normal coding tasks. It does not try to replace Shell for builds/Git, add a permission system, or become an IDE.
 
-- C# targeting `net10.0-windows`; official ModelContextProtocol SDK 2.2.0; STDIO transport.
+- C# targeting `net10.0-windows`; official ModelContextProtocol and ModelContextProtocol.AspNetCore SDK packages 2.2.0; default STDIO and optional Streamable HTTP transports. Both modes require the .NET 10 and ASP.NET Core 10 x64 runtimes.
 - Official bundled ripgrep 15.2.0, launched by explicit install-relative path and argv, without a Shell, runtime download, user ripgrep config, or `--follow`.
 - Stable traversal/pagination, cancellation propagation, bounded pipe processing, and Windows Job Object cleanup.
 - Current and initialize-era MCP compatibility. Codex's per-server exposure setting keeps the four tools direct-only while leaving Code Mode available to other tools.
 - A small managed filesystem/process boundary isolates Windows-specific path and lifecycle details. This distribution does not claim cross-platform support.
+
+## Transport hosting
+
+The same executable selects one transport with `--transport stdio` or `--transport http`; omitting the option preserves STDIO. HTTP binds only IPv4 `127.0.0.1`, exposes `/mcp`, and defaults to port 43127. `--port <1-65535>` selects a port only in HTTP mode. The user runs the HTTP process manually and stops it with `Ctrl+C`; a client connection does not launch it. There is no service installation, autostart, remote bind option, authentication, or Codex-only caller restriction.
+
+The packaged `Start-Http.bat` sits beside the executable and offers manual double-click startup with that same HTTP command. It uses the neighboring executable, preserves the default port and default-off diagnostics, and does not install or register anything. Terminal callers may pass extra startup arguments. The script pauses after the executable exits to keep messages visible, then returns that exit code; a missing neighboring executable is a launcher error.
+
+HTTP checks the request Host and any supplied Origin against `127.0.0.1`, `localhost`, or `[::1]` on the configured port. Origin must be a single valid HTTP origin; absent Origin is accepted. Invalid values receive HTTP 403 before MCP processing. The listener remains IPv4-only. There is no CORS policy or HTTP access logging, and HTTP startup/protocol errors remain outside optional tool-result diagnostics.
+
+The SDK's `StatefulForInitializeClients` mode retains sessions for initialize-era clients and supports MCP `2026-07-28` clients through current SDK behavior. Tools and results do not depend on transport or client identity. An initialize-era HTTP POST disconnect does not cancel the operation; its client sends `notifications/cancelled` or disposes the session to stop it. A `2026-07-28` request instead cancels when its response stream closes. Normal service shutdown cancels active work across both protocol eras; ripgrep's per-call Job controls child-process lifetime, and forced process exit closes those Job handles.
 
 ## Representation and exposure rationale
 
@@ -99,4 +109,4 @@ The four tool APIs, canonical result schemas/budgets, and annotations remain unc
 
 No multi-file batch reader, standalone metadata tool, media reader, semantic search, file-mutation tool, or arbitrary process tool. Independent reads can be called concurrently. Unknown-length log tails and arbitrary later segments of clipped long lines are examples of tasks outside this basic tool surface. Choosing between File Inspector and Shell follows the consumer policy selected from [README.md](README.md#install-in-codex), rather than a fixed list of exceptions. The server itself continues to launch bundled ripgrep directly, without a Shell.
 
-These choices reflect a bounded personal tool, not a claim that every agent should use an identical schema. The test suite includes real-engine boundary cases and actual STDIO metadata checks; passing it is not proof of bug-free behavior or independent security review.
+These choices reflect a bounded personal tool, not a claim that every agent should use an identical schema. The test suite includes real-engine boundary cases and actual STDIO/HTTP metadata checks across both supported protocol eras; passing it is not proof of bug-free behavior or independent security review.

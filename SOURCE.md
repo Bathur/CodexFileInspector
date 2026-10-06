@@ -2,7 +2,7 @@
 
 Publish the Windows binary archive together with the matching `CodexFileInspector-<version>-source.zip` and `SHA256SUMS` from the same release. Do not distribute a binary-only release without the source access required by its license. The public Git repository's matching release/tag is another way to obtain the project source once published.
 
-The source archive includes the application's C# source, tests, solution and project files, locked dependency versions, local build scripts, license texts, and installation documentation. Extract it to any Windows x64 directory and follow the README's source-build steps. No Git history or private development files are required. .NET SDK 10.0.400 (or a permitted patch) and PowerShell 7 are build prerequisites; the application is framework-dependent and does not distribute the .NET runtime.
+The source archive includes the application's C# source, tests, solution and project files, locked dependency versions, local build scripts, license texts, and installation documentation. Extract it to any Windows x64 directory and follow the README's source-build steps. No Git history or private development files are required. .NET SDK 10.0.400 (or a permitted patch) and PowerShell 7 are build prerequisites; the application is framework-dependent and does not distribute the .NET or ASP.NET Core runtimes. Both .NET 10 and ASP.NET Core 10 x64 runtimes are needed to run either transport mode.
 
 Upstream dependency source is available without charge at the exact repository commits and source-archive URLs recorded in the .NET dependency inventory:
 

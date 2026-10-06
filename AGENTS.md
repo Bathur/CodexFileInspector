@@ -8,7 +8,7 @@
 - `read_file` returns logical text without injected line-number prefixes. Grep remains location-oriented and numbered.
 - Concrete paths are fully qualified Windows absolute paths. Globs are relative to the explicit search root. Use native ripgrep hidden/ignore precedence, explicit excludes first, no global ripgrep configuration, and no `--follow`.
 - Do not add a directory allowlist, physical target resolver, network-storage classification, per-call timeout parameter, or runtime downloads. Filesystem access follows OS permissions.
-- Keep C#/.NET 10, the official MCP SDK, STDIO, and the pinned bundled ripgrep unless a change is requested.
+- Keep C#/.NET 10, the official MCP SDK 2.2.0, the default STDIO and optional loopback Streamable HTTP modes, and the pinned bundled ripgrep unless a change is requested. HTTP is manually started, has no authentication, binds only `127.0.0.1`, and validates Host and supplied Origin. Preserve both protocol eras and cancellation/process cleanup. Do not add remote binding, autostart, access logs, or a successful-call trail. Both transports share the .NET 10 and ASP.NET Core 10 x64 runtime requirements.
 - Preserve standard GPL-3.0-only and all third-party notices. Do not add custom license clauses or an "or later" grant.
 - Keep project-owned dependency homes, caches, tools, and temporary state under `.local/`; generated output belongs under `.artifacts/`. Do not change global PATH, durable environment variables, or user-level tool configuration.
 - Use `scripts/Acquire-Ripgrep.ps1` and `build.ps1`; the build script redirects writable homes and caches. Run Release tests for code changes and the Publish target for distribution changes.
